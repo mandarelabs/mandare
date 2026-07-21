@@ -90,7 +90,11 @@ None.
 - Static actor/mandate identity from env (S3/S4).
 - node:sqlite ExperimentalWarning noise (accepted, Q7; better-sqlite3 is the
   documented fallback if RC gaps bite).
-- CI workflows written but unverified against live GitHub runners until first push.
+- ~~CI workflows written but unverified against live GitHub runners until first push.~~
+  Verified 2026-07-21: run 29832935883 all 4 jobs green (red-team 27s, node 22
+  55s, node 24 51s, smoke 26s). Cosmetic: bump actions/checkout, setup-node,
+  pnpm/action-setup to their Node-24 major versions in S1 (deprecation
+  annotations for Node 20-targeting actions).
 
 ---
 
