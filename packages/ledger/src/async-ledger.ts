@@ -36,15 +36,22 @@ export class AsyncLedger {
     store: LedgerStore,
     options: { doorId: string; keyPath: string }
   ): Promise<AsyncLedger> {
-    const doorKey = loadOrCreateDoorKey(options.keyPath);
-    const ledger = new AsyncLedger(store, doorKey, options.doorId);
-    const existingRows = await store.readMetaRows();
-    if (existingRows === null) {
-      await store.initMeta(newMetaRows(options.doorId, doorKey, new Date().toISOString()));
-    } else {
-      assertDoorOwnsMeta(metaFromRows(existingRows), doorKey, options.doorId);
+    try {
+      const doorKey = loadOrCreateDoorKey(options.keyPath);
+      const ledger = new AsyncLedger(store, doorKey, options.doorId);
+      const existingRows = await store.readMetaRows();
+      if (existingRows === null) {
+        await store.initMeta(newMetaRows(options.doorId, doorKey, new Date().toISOString()));
+      } else {
+        assertDoorOwnsMeta(metaFromRows(existingRows), doorKey, options.doorId);
+      }
+      return ledger;
+    } catch (error) {
+      // A rejected open (wrong door key, foreign door id) must not leak the
+      // store's connections — the caller never received a ledger to close.
+      await store.close().catch(() => undefined);
+      throw error;
     }
-    return ledger;
   }
 
   append(input: AppendInput): Promise<LedgerEntryV1> {

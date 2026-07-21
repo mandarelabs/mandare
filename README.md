@@ -21,7 +21,10 @@ actually did.
   anyone can embed, including parties who distrust us.
 - **Spec** (`packages/spec`, Apache-2.0) — the typed mandate and ledger-entry
   schemas. An open contract.
-- **CLI** (`apps/cli`) — `mandare verify --db <path>`.
+- **CLI** (`apps/cli`) — `mandare verify --db <path>` (RFC 6962 tree heads,
+  `--key-directory`, `--prev-head` rollback detection, `--prove` inclusion
+  proofs) and `mandare directory` (publish door keys as an RFC 9421-style
+  JWKS — see `docs/KEY-DIRECTORY.md`).
 
 ## Quickstart
 

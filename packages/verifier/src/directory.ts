@@ -128,8 +128,17 @@ export async function parseKeyDirectory(raw: unknown): Promise<KeyDirectory> {
     }
     const kid = optionalString(jwkRaw, 'kid', index);
     const role = optionalString(jwkRaw, 'mnd:role', index);
+    const keyId = await sha256HexAsync(publicKey);
+    // Reject duplicates (review S1-M2): resolution is a keyId → key map, so
+    // a second listing of the same key — e.g. with a wider validity window —
+    // would silently override the first. Ambiguity dies loudly instead.
+    if (keys.some((existing) => existing.keyId === keyId)) {
+      throw new DirectoryParseError(
+        `keys[${index}] duplicates key ${keyId.slice(0, 12)}… — one entry per key`
+      );
+    }
     keys.push({
-      keyId: await sha256HexAsync(publicKey),
+      keyId,
       publicKey,
       ...(kid === undefined ? {} : { kid }),
       ...(notBefore === undefined ? {} : { notBefore }),

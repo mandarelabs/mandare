@@ -260,6 +260,17 @@ describe('tampered proofs fail', () => {
     ).toBe(false);
   });
 
+  test('consistency vs the empty tree requires the true empty root (review S1-M1)', async () => {
+    const entryHashes = await syntheticLeaves(3);
+    const { root } = await computeTreeHead(entryHashes);
+    expect(
+      await verifyConsistency({ size1: 0, root1: EMPTY_TREE_ROOT, size2: 3, root2: root, proof: [] })
+    ).toBe(true);
+    expect(
+      await verifyConsistency({ size1: 0, root1: 'ab'.repeat(32), size2: 3, root2: root, proof: [] })
+    ).toBe(false);
+  });
+
   test('consistency: equal sizes require identical roots and empty proof', async () => {
     const entryHashes = await syntheticLeaves(3);
     const { root } = await computeTreeHead(entryHashes);

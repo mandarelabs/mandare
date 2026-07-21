@@ -142,6 +142,18 @@ function directoryResolver(directory: KeyDirectory): KeyResolver {
         };
       }
       const tsSeconds = Date.parse(entryTs) / 1000;
+      // FAIL CLOSED (review S1-H1): the schema regex admits non-calendar
+      // timestamps like 2026-13-01, which Date.parse turns into NaN — and
+      // every NaN comparison is false, which would silently skip the
+      // validity window. An unparseable ts must never pass a windowed key.
+      if (!Number.isFinite(tsSeconds)) {
+        return {
+          failure: {
+            code: 'KEY_EXPIRED',
+            reason: `entry ts ${entryTs} is not a parseable instant — refusing key-window validation`,
+          },
+        };
+      }
       if (entry.notBefore !== undefined && tsSeconds < entry.notBefore) {
         return {
           failure: {

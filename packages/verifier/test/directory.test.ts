@@ -155,6 +155,17 @@ describe('parseKeyDirectory — boundary validation (R4)', () => {
   ])('rejects hostile input: %s', async (_label, raw) => {
     await expect(parseKeyDirectory(raw)).rejects.toThrow(DirectoryParseError);
   });
+
+  test('rejects duplicate keys (review S1-M2): a second listing cannot widen a window', async () => {
+    await expect(
+      parseKeyDirectory({
+        keys: [
+          { kty: 'OKP', crv: 'Ed25519', x: doorA.publicKeyB64Url, exp: 100 },
+          { kty: 'OKP', crv: 'Ed25519', x: doorA.publicKeyB64Url }, // no window — would override
+        ],
+      })
+    ).rejects.toThrow(/duplicates key/);
+  });
 });
 
 describe('verifyChain with a key directory — multi-door', () => {
@@ -234,6 +245,19 @@ describe('verifyChain with a key directory — rotation windows', () => {
     const result = await verifyChain(chain, { keyDirectory: await rotationDirectory() });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.failure.code).toBe('KEY_EXPIRED');
+  });
+
+  test('RED-TEAM (review S1-H1): regex-valid but non-calendar ts cannot bypass the window', async () => {
+    // '2026-13-01' passes the schema's shape regex but Date.parse → NaN;
+    // NaN comparisons are all false, so without the fail-closed guard the
+    // expiry check would silently no-op and the stolen key would pass.
+    const chain = await makeChain([{ door: () => doorA, ts: '2026-13-01T00:00:00.000Z' }]);
+    const result = await verifyChain(chain, { keyDirectory: await rotationDirectory() });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.code).toBe('KEY_EXPIRED');
+      expect(result.failure.reason).toContain('not a parseable instant');
+    }
   });
 });
 

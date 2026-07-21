@@ -285,14 +285,13 @@ describe('driver parity', () => {
 
   test('AsyncLedger refuses to write with a swapped door key (stolen-DB scenario)', async () => {
     const otherKeyPath = join(mkdtempSync(join(tmpdir(), 'mandare-pg-key-')), 'other.pem');
-    const otherStore = PgStore.connect(appUrl);
-    try {
-      await expect(
-        AsyncLedger.open(otherStore, { doorId: 'gateway:pg-test', keyPath: otherKeyPath })
-      ).rejects.toThrow(/refusing to write/);
-    } finally {
-      await otherStore.close();
-    }
+    // open() owns store cleanup on rejection — no manual close (review S1-L2).
+    await expect(
+      AsyncLedger.open(PgStore.connect(appUrl), {
+        doorId: 'gateway:pg-test',
+        keyPath: otherKeyPath,
+      })
+    ).rejects.toThrow(/refusing to write/);
   });
 
   test('concurrent appends never race to the same seq (advisory lock)', async () => {

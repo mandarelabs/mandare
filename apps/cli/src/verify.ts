@@ -227,5 +227,9 @@ export function parsePrevHead(value: string): TreeHead {
   if (match === null) {
     throw new Error('--prev-head must be <size>:<64-hex-root>, e.g. 42:ab12…');
   }
-  return { size: Number.parseInt(match[1] as string, 10), root: match[2] as string };
+  const size = Number.parseInt(match[1] as string, 10);
+  if (size > 2 ** 31 - 1) {
+    throw new Error('--prev-head size exceeds the maximum tree size (2^31 - 1)');
+  }
+  return { size, root: match[2] as string };
 }

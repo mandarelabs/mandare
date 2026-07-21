@@ -250,8 +250,10 @@ export async function verifyConsistency(input: ConsistencyVerifyInput): Promise<
     return proof.length === 0 && input.root1 === input.root2;
   }
   if (size1 === 0) {
-    // Any tree is consistent with the empty tree; the proof carries nothing.
-    return proof.length === 0;
+    // Any tree extends the empty tree; the proof carries nothing — but the
+    // claimed old root must actually BE the empty-tree root (review S1-M1:
+    // silently ignoring root1 would bless a garbage recorded head).
+    return proof.length === 0 && input.root1 === EMPTY_TREE_ROOT;
   }
 
   const proofBytes = proof.map((hex) => hexToBytes(hex));
