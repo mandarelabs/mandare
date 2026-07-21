@@ -3,8 +3,32 @@
  */
 
 export { buildGateway } from './server.js';
-export type { GatewayDeps, LedgerWriter } from './server.js';
-export { loadConfigFromEnv } from './config.js';
-export type { GatewayConfig } from './config.js';
-export { forwardChatCompletion } from './openrouter.js';
-export type { FetchLike, ProviderResponse, ProviderUsage } from './openrouter.js';
+export type { GatewayDeps, SpendLedgerWriter } from './server.js';
+export { loadConfigFromEnv, loadMandate } from './config.js';
+export type { GatewayConfig, ProviderEndpoint } from './config.js';
+export {
+  DEFAULT_PRICING,
+  costUsdMicros,
+  estimateTokensFromChars,
+  estimateUsdMicros,
+  findPricing,
+  loadPricingTable,
+  usdMicrosToLedgerMicros,
+} from './pricing.js';
+export type { ModelPricing, UsageTokens } from './pricing.js';
+export { anthropicAdapter } from './providers/anthropic.js';
+export { createOpenAiLikeAdapter, openaiAdapter, openrouterAdapter } from './providers/openai-like.js';
+export type {
+  FetchLike,
+  ParsedUsage,
+  ProviderAdapter,
+  ProviderName,
+  StreamUsageParser,
+} from './providers/types.js';
+export { SseParser } from './sse.js';
+export type { SseEvent } from './sse.js';
+export {
+  OpenRouterProvisioningClient,
+  OpenRouterProvisioningError,
+} from './provisioning.js';
+export type { AgentKeySpec, ProvisionedKey } from './provisioning.js';

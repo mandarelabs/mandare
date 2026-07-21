@@ -24,6 +24,7 @@
     "typecheck": "tsc -p tsconfig.test.json --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
+    "red-team": "vitest run test/red-team",
     "start": "node dist/start.js"
   },
   "dependencies": {
