@@ -21,9 +21,9 @@ jobs:
       # no-op where it's already unflagged and required on older 22.x.
       NODE_OPTIONS: ${{ matrix.node == '22' && '--experimental-sqlite' || '' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
           cache: pnpm
@@ -37,9 +37,9 @@ jobs:
     name: red-team tamper suite (rule R5)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: pnpm
@@ -51,9 +51,9 @@ jobs:
     name: walking-skeleton smoke (mock provider, no secrets)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: pnpm
