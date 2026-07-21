@@ -3,7 +3,14 @@ import { DatabaseSync } from 'node:sqlite';
 import type { LedgerEntryV1 } from '@mandarelabs/spec';
 
 import type { LedgerHead } from './entry.js';
-import type { LedgerStore } from './store.js';
+import type { SpendCounter } from './projection.js';
+import {
+  runProjectedAppend,
+  type AppendProjectedResult,
+  type LedgerStore,
+  type ProjectionTx,
+  type Projector,
+} from './store.js';
 
 /**
  * `LedgerStore` driver over `node:sqlite` — the same storage the sync
@@ -36,7 +43,22 @@ CREATE TRIGGER IF NOT EXISTS ledger_meta_no_update
 CREATE TRIGGER IF NOT EXISTS ledger_meta_no_delete
   BEFORE DELETE ON ledger_meta
   BEGIN SELECT RAISE(ABORT, 'ledger meta is write-once'); END;
+-- Spend-counter PROJECTION (S2): derived from the ledger, rebuildable from
+-- it at any time — deliberately mutable, so NO append-only triggers here.
+-- Integrity comes from replay(ledger) == counters, not from storage locks.
+CREATE TABLE IF NOT EXISTS budget_counters (
+  scope_key       TEXT PRIMARY KEY,
+  reserved_micros INTEGER NOT NULL,
+  settled_micros  INTEGER NOT NULL,
+  intents         INTEGER NOT NULL
+) STRICT;
+CREATE TABLE IF NOT EXISTS projection_meta (
+  key   TEXT PRIMARY KEY,
+  value INTEGER NOT NULL
+) STRICT;
 `;
+
+const PROJECTION_SEQ_KEY = 'spend_projection_seq';
 
 /**
  * Open the SQLite database with the ledger schema, append-only triggers, and
@@ -58,6 +80,14 @@ export function openSqliteDatabase(dbPath: string): DatabaseSync {
 
 export class SqliteStore implements LedgerStore {
   private readonly db: DatabaseSync;
+  /**
+   * In-process transaction mutex. `node:sqlite` is ONE connection, and the
+   * projected-append transaction awaits between BEGIN and COMMIT — two
+   * concurrent calls would nest transactions and blow up. BEGIN IMMEDIATE
+   * only locks out OTHER processes; this chain serializes our own
+   * (red-team: the driver-level budget-race test rides on it).
+   */
+  private txQueue: Promise<unknown> = Promise.resolve();
 
   private constructor(db: DatabaseSync) {
     this.db = db;
@@ -67,23 +97,79 @@ export class SqliteStore implements LedgerStore {
     return new SqliteStore(openSqliteDatabase(dbPath));
   }
 
+  private serialized<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.txQueue.then(fn, fn);
+    this.txQueue = run.catch(() => undefined);
+    return run;
+  }
+
   // Methods are `async` so synchronous SQLite errors surface as rejections,
   // matching the driver contract exactly.
-  async appendWithLock(build: (head: LedgerHead | null) => LedgerEntryV1): Promise<LedgerEntryV1> {
-    this.db.exec('BEGIN IMMEDIATE;');
-    try {
-      const entry = build(this.headSync());
-      this.db
-        .prepare(
-          'INSERT INTO ledger_entries (seq, entry_hash, prev_hash, entry_json) VALUES (?, ?, ?, ?)'
-        )
-        .run(entry.seq, entry.entry_hash, entry.prev_hash, JSON.stringify(entry));
-      this.db.exec('COMMIT;');
-      return entry;
-    } catch (error) {
-      this.db.exec('ROLLBACK;');
-      throw error;
-    }
+  appendWithLock(build: (head: LedgerHead | null) => LedgerEntryV1): Promise<LedgerEntryV1> {
+    return this.serialized(() => {
+      this.db.exec('BEGIN IMMEDIATE;');
+      try {
+        const entry = build(this.headSync());
+        this.insertEntry(entry);
+        this.db.exec('COMMIT;');
+        return Promise.resolve(entry);
+      } catch (error) {
+        this.db.exec('ROLLBACK;');
+        throw error;
+      }
+    });
+  }
+
+  appendProjected(
+    build: (head: LedgerHead | null) => LedgerEntryV1,
+    project: Projector
+  ): Promise<AppendProjectedResult> {
+    return this.serialized(async () => {
+      this.db.exec('BEGIN IMMEDIATE;');
+      try {
+        const result = await runProjectedAppend({
+          tx: this.projectionTx(),
+          build,
+          project,
+          insert: (entry) => {
+            this.insertEntry(entry);
+            return Promise.resolve();
+          },
+        });
+        if (result.kind === 'refused') {
+          // A refused reservation aborts EVERYTHING: no entry, no counter change.
+          this.db.exec('ROLLBACK;');
+          return result;
+        }
+        this.db.exec('COMMIT;');
+        return result;
+      } catch (error) {
+        this.db.exec('ROLLBACK;');
+        throw error;
+      }
+    });
+  }
+
+  runProjection<T>(fn: (tx: ProjectionTx) => Promise<T>): Promise<T> {
+    return this.serialized(async () => {
+      this.db.exec('BEGIN IMMEDIATE;');
+      try {
+        const result = await fn(this.projectionTx());
+        this.db.exec('COMMIT;');
+        return result;
+      } catch (error) {
+        this.db.exec('ROLLBACK;');
+        throw error;
+      }
+    });
+  }
+
+  private insertEntry(entry: LedgerEntryV1): void {
+    this.db
+      .prepare(
+        'INSERT INTO ledger_entries (seq, entry_hash, prev_hash, entry_json) VALUES (?, ?, ?, ?)'
+      )
+      .run(entry.seq, entry.entry_hash, entry.prev_hash, JSON.stringify(entry));
   }
 
   head(): Promise<LedgerHead | null> {
@@ -118,6 +204,94 @@ export class SqliteStore implements LedgerStore {
   close(): Promise<void> {
     this.db.close();
     return Promise.resolve();
+  }
+
+  private projectionTx(): ProjectionTx {
+    return {
+      head: () => Promise.resolve(this.headSync()),
+      getCounter: (key) => {
+        const row = this.db
+          .prepare(
+            'SELECT reserved_micros, settled_micros, intents FROM budget_counters WHERE scope_key = ?'
+          )
+          .get(key) as
+          | { reserved_micros: number; settled_micros: number; intents: number }
+          | undefined;
+        return Promise.resolve(
+          row === undefined
+            ? null
+            : {
+                reservedMicros: row.reserved_micros,
+                settledMicros: row.settled_micros,
+                intents: row.intents,
+              }
+        );
+      },
+      putCounter: (key, value) => {
+        this.db
+          .prepare(
+            `INSERT INTO budget_counters (scope_key, reserved_micros, settled_micros, intents)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT(scope_key) DO UPDATE SET
+               reserved_micros = excluded.reserved_micros,
+               settled_micros = excluded.settled_micros,
+               intents = excluded.intents`
+          )
+          .run(key, value.reservedMicros, value.settledMicros, value.intents);
+        return Promise.resolve();
+      },
+      getEntryByHash: (entryHash) => {
+        const row = this.db
+          .prepare('SELECT entry_json FROM ledger_entries WHERE entry_hash = ?')
+          .get(entryHash) as { entry_json: string } | undefined;
+        return Promise.resolve(
+          row === undefined ? null : (JSON.parse(row.entry_json) as unknown)
+        );
+      },
+      getProjectionSeq: () => {
+        const row = this.db
+          .prepare('SELECT value FROM projection_meta WHERE key = ?')
+          .get(PROJECTION_SEQ_KEY) as { value: number } | undefined;
+        return Promise.resolve(row?.value ?? 0);
+      },
+      setProjectionSeq: (seq) => {
+        this.db
+          .prepare(
+            'INSERT INTO projection_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
+          )
+          .run(PROJECTION_SEQ_KEY, seq);
+        return Promise.resolve();
+      },
+      clearCounters: () => {
+        this.db.exec('DELETE FROM budget_counters;');
+        return Promise.resolve();
+      },
+      readAllEntries: () => {
+        const rows = this.db
+          .prepare('SELECT entry_json FROM ledger_entries ORDER BY seq ASC')
+          .all() as { entry_json: string }[];
+        return Promise.resolve(rows.map((row) => JSON.parse(row.entry_json) as unknown));
+      },
+      readAllCounters: () => {
+        const rows = this.db
+          .prepare('SELECT scope_key, reserved_micros, settled_micros, intents FROM budget_counters')
+          .all() as {
+          scope_key: string;
+          reserved_micros: number;
+          settled_micros: number;
+          intents: number;
+        }[];
+        const counters = new Map<string, SpendCounter>();
+        for (const row of rows) {
+          counters.set(row.scope_key, {
+            reservedMicros: row.reserved_micros,
+            settledMicros: row.settled_micros,
+            intents: row.intents,
+          });
+        }
+        return Promise.resolve(counters);
+      },
+    };
   }
 
   private headSync(): LedgerHead | null {

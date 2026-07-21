@@ -43,6 +43,30 @@ stating that is intentional and load-bearing.
 Bench: `pnpm --filter @mandarelabs/ledger bench` (build first) — S1 numbers
 in TASKS.md.
 
+## Spend projection (S2 — `projection.ts` / `spend-ledger.ts`)
+
+Budget counters are a DERIVED PROJECTION of the ledger, never a second
+source of truth (binding architecture decision):
+
+- `budget_counters` + `projection_meta` are deliberately MUTABLE (no
+  append-only triggers); integrity comes from the invariant
+  **replay(ledger) == counters**, enforced by `verifySpendProjection` and
+  red-team-tested on both drivers (`projection-race.test.ts`).
+- Every counter mutation happens in the SAME transaction as its ledger
+  append (`appendProjected`). INTENT entries carry the estimate in
+  `cost.amount` and RESERVE it; RESULT entries (via `outcome_ref`) release
+  the reservation and settle true cost into the INTENT's day bucket;
+  `llm.call.denied` entries record refusals with zero counter effect.
+- Reservation guards run under the append lock — that is what makes
+  concurrent cap overshoot structurally impossible (the race red-team
+  asserts EXACT admission counts).
+- Projection stale (seq ≠ head, e.g. after a plain `append`) ⇒
+  `ProjectionStaleError`, callers fail closed; rebuild explicitly with
+  `rebuildSpendProjection` (ledger is the ground truth).
+- `SqliteStore` serializes its transactions through an internal promise
+  queue — node:sqlite is ONE connection and projected appends await between
+  BEGIN and COMMIT. Don't remove it; the race test exists because of it.
+
 ## Commands
 
 `pnpm --filter @mandarelabs/ledger test | red-team`

@@ -3,7 +3,14 @@ import pg from 'pg';
 import type { LedgerEntryV1 } from '@mandarelabs/spec';
 
 import type { LedgerHead } from './entry.js';
-import type { LedgerStore } from './store.js';
+import type { SpendCounter } from './projection.js';
+import {
+  runProjectedAppend,
+  type AppendProjectedResult,
+  type LedgerStore,
+  type ProjectionTx,
+  type Projector,
+} from './store.js';
 
 /**
  * Postgres team-mode store (BUILD-DECISIONS Q7). Storage enforcement is
@@ -57,7 +64,22 @@ DROP TRIGGER IF EXISTS ledger_meta_write_once ON ledger_meta;
 CREATE TRIGGER ledger_meta_write_once
   BEFORE UPDATE OR DELETE ON ledger_meta
   FOR EACH ROW EXECUTE FUNCTION mandare_meta_write_once();
+-- Spend-counter PROJECTION (S2): derived from the ledger, rebuildable from
+-- it at any time — deliberately mutable, so NO append-only protection here.
+-- Integrity comes from replay(ledger) == counters, not from storage locks.
+CREATE TABLE IF NOT EXISTS budget_counters (
+  scope_key       TEXT PRIMARY KEY,
+  reserved_micros BIGINT NOT NULL,
+  settled_micros  BIGINT NOT NULL,
+  intents         BIGINT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS projection_meta (
+  key   TEXT PRIMARY KEY,
+  value BIGINT NOT NULL
+);
 `;
+
+const PROJECTION_SEQ_KEY = 'spend_projection_seq';
 
 /**
  * One-time admin provisioning: schema, append-only triggers, and the
@@ -76,6 +98,12 @@ export async function provisionPgLedger(
     const role = client.escapeIdentifier(options.appRole);
     await client.query(`REVOKE ALL ON ledger_entries, ledger_meta FROM ${role};`);
     await client.query(`GRANT SELECT, INSERT ON ledger_entries, ledger_meta TO ${role};`);
+    // The projection is a mutable derived table — the app role may maintain
+    // it (incl. DELETE for rebuilds). The LEDGER grants above stay INSERT-only.
+    await client.query(`REVOKE ALL ON budget_counters, projection_meta FROM ${role};`);
+    await client.query(
+      `GRANT SELECT, INSERT, UPDATE, DELETE ON budget_counters, projection_meta TO ${role};`
+    );
   } finally {
     await client.end();
   }
@@ -127,6 +155,62 @@ export class PgStore implements LedgerStore {
     }
   }
 
+  async appendProjected(
+    build: (head: LedgerHead | null) => LedgerEntryV1,
+    project: Projector
+  ): Promise<AppendProjectedResult> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock($1, $2)', [
+        APPEND_LOCK_CLASS,
+        APPEND_LOCK_ID,
+      ]);
+      const result = await runProjectedAppend({
+        tx: projectionTxWithClient(client),
+        build,
+        project,
+        insert: async (entry) => {
+          await client.query(
+            'INSERT INTO ledger_entries (seq, entry_hash, prev_hash, entry_json) VALUES ($1, $2, $3, $4)',
+            [entry.seq, entry.entry_hash, entry.prev_hash, JSON.stringify(entry)]
+          );
+        },
+      });
+      if (result.kind === 'refused') {
+        // A refused reservation aborts EVERYTHING: no entry, no counter change.
+        await client.query('ROLLBACK');
+        return result;
+      }
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async runProjection<T>(fn: (tx: ProjectionTx) => Promise<T>): Promise<T> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock($1, $2)', [
+        APPEND_LOCK_CLASS,
+        APPEND_LOCK_ID,
+      ]);
+      const result = await fn(projectionTxWithClient(client));
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async head(): Promise<LedgerHead | null> {
     return headWithClient(this.pool);
   }
@@ -167,6 +251,92 @@ export class PgStore implements LedgerStore {
   async close(): Promise<void> {
     await this.pool.end();
   }
+}
+
+function projectionTxWithClient(client: pg.PoolClient): ProjectionTx {
+  return {
+    head: () => headWithClient(client),
+    getCounter: async (key) => {
+      const result = await client.query<{
+        reserved_micros: string;
+        settled_micros: string;
+        intents: string;
+      }>(
+        'SELECT reserved_micros, settled_micros, intents FROM budget_counters WHERE scope_key = $1',
+        [key]
+      );
+      const row = result.rows[0];
+      // BIGINT arrives as string from node-postgres; micros stay far below
+      // 2^53, so Number is exact here.
+      return row === undefined
+        ? null
+        : {
+            reservedMicros: Number(row.reserved_micros),
+            settledMicros: Number(row.settled_micros),
+            intents: Number(row.intents),
+          };
+    },
+    putCounter: async (key, value) => {
+      await client.query(
+        `INSERT INTO budget_counters (scope_key, reserved_micros, settled_micros, intents)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (scope_key) DO UPDATE SET
+           reserved_micros = EXCLUDED.reserved_micros,
+           settled_micros = EXCLUDED.settled_micros,
+           intents = EXCLUDED.intents`,
+        [key, value.reservedMicros, value.settledMicros, value.intents]
+      );
+    },
+    getEntryByHash: async (entryHash) => {
+      const result = await client.query<{ entry_json: string }>(
+        'SELECT entry_json FROM ledger_entries WHERE entry_hash = $1',
+        [entryHash]
+      );
+      const row = result.rows[0];
+      return row === undefined ? null : (JSON.parse(row.entry_json) as unknown);
+    },
+    getProjectionSeq: async () => {
+      const result = await client.query<{ value: string }>(
+        'SELECT value FROM projection_meta WHERE key = $1',
+        [PROJECTION_SEQ_KEY]
+      );
+      const row = result.rows[0];
+      return row === undefined ? 0 : Number(row.value);
+    },
+    setProjectionSeq: async (seq) => {
+      await client.query(
+        `INSERT INTO projection_meta (key, value) VALUES ($1, $2)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+        [PROJECTION_SEQ_KEY, seq]
+      );
+    },
+    clearCounters: async () => {
+      await client.query('DELETE FROM budget_counters');
+    },
+    readAllEntries: async () => {
+      const result = await client.query<{ entry_json: string }>(
+        'SELECT entry_json FROM ledger_entries ORDER BY seq ASC'
+      );
+      return result.rows.map((row) => JSON.parse(row.entry_json) as unknown);
+    },
+    readAllCounters: async () => {
+      const result = await client.query<{
+        scope_key: string;
+        reserved_micros: string;
+        settled_micros: string;
+        intents: string;
+      }>('SELECT scope_key, reserved_micros, settled_micros, intents FROM budget_counters');
+      const counters = new Map<string, SpendCounter>();
+      for (const row of result.rows) {
+        counters.set(row.scope_key, {
+          reservedMicros: Number(row.reserved_micros),
+          settledMicros: Number(row.settled_micros),
+          intents: Number(row.intents),
+        });
+      }
+      return counters;
+    },
+  };
 }
 
 async function headWithClient(

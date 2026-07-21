@@ -6,8 +6,11 @@ import {
   assertDoorOwnsMeta,
   metaFromRows,
   newMetaRows,
+  type AppendProjectedResult,
   type LedgerMeta,
   type LedgerStore,
+  type ProjectionTx,
+  type Projector,
 } from './store.js';
 
 /**
@@ -58,6 +61,23 @@ export class AsyncLedger {
     return this.store.appendWithLock((head) =>
       buildEntry(input, head, this.doorId, this.doorKey)
     );
+  }
+
+  /**
+   * Append with the spend projection in the SAME transaction (S2 budgets).
+   * A projector refusal aborts everything — no entry, no counter change —
+   * which is what makes concurrent cap overshoot impossible by construction.
+   */
+  appendProjected(input: AppendInput, project: Projector): Promise<AppendProjectedResult> {
+    return this.store.appendProjected(
+      (head) => buildEntry(input, head, this.doorId, this.doorKey),
+      project
+    );
+  }
+
+  /** Run a function inside a projection transaction (rebuild/verify/snapshot). */
+  runProjection<T>(fn: (tx: ProjectionTx) => Promise<T>): Promise<T> {
+    return this.store.runProjection(fn);
   }
 
   head(): Promise<LedgerHead | null> {
