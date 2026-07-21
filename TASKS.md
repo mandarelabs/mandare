@@ -228,7 +228,213 @@ Fixed same-session:
 
 ---
 
-## → S2 handoff (gateway + budgets)
+## S2 — Gateway + budgets (2026-07-21)
+
+**Scope (per S1 handoff):** real policy engine (budgets/velocity, SPEC §5
+order) replacing the allow-all stub · budget counters as a ledger projection
+with reserve/settle · Anthropic + OpenAI adapters + streaming true-up
+(OpenRouter mocked) · OpenRouter provisioning-key rail (mocked) · red-team
+additions (budget race, hostile input, provider failures) · the recorded
+demo (runaway loop dies at €20) as an acceptance test.
+
+**Status: complete.** All exit criteria met: demo recorded + acceptance-
+tested, red-team green (old + new) on both drivers, CI green on origin, Code
+Reviewer pass done (findings fixed same session), live provider smoke passed
+against real Anthropic + OpenAI. S0+S1 red-team floor untouched and green.
+
+### Done
+
+- **`packages/policy-engine`**: `MandatePolicyEngine` replaces the S0
+  allow-all stub. Evaluates SPEC §5 order exactly (identity → mandate window
+  → scope → budget → counterparty → approval threshold). `checkBudgets` is
+  pure arithmetic, run pre-call by the engine AND again inside the ledger
+  append transaction (same function, provably identical math). Fail-closed:
+  `verified_only` counterparties deny until the registry exists;
+  above-threshold approvals deny until the S4 push lands; non-calendar
+  validity timestamps deny (S1 H1 lesson applied from day one); overlapping
+  spend scopes deny as ambiguous (v0 never merges budgets). 35 tests.
+- **`packages/ledger` spend projection** (`projection.ts` + `spend-ledger.ts`):
+  the binding architecture — counters are a DERIVED PROJECTION of the ledger,
+  never a second truth. `budget_counters` + `projection_meta` update in the
+  SAME transaction as each append (`appendProjected`), rebuildable from the
+  ledger alone, with `verifySpendProjection` enforcing replay(ledger) ==
+  counters. INTENT entries RESERVE the estimate under the append lock; RESULT
+  entries (via `outcome_ref`) release and settle true cost into the INTENT's
+  day bucket (midnight cannot reopen a cap); `llm.call.denied` entries record
+  refusals with zero counter effect. Stale projection (seq ≠ head) →
+  `ProjectionStaleError`, callers fail closed. Both SQLite and Postgres
+  drivers; `SqliteStore` serializes its transactions through an internal
+  promise queue (node:sqlite is one connection, projected appends await
+  between BEGIN and COMMIT).
+- **`packages/gateway`**: full reserve→forward→settle flow. NATIVE provider
+  surfaces (no lossy unified transform): `/v1/messages` (Anthropic, base URL
+  WITHOUT /v1) and `/v1/chat/completions` (OpenAI/OpenRouter, base URL WITH
+  /v1). Streaming passes through untouched while an SSE tee parses usage.
+  True-up per Q16: OpenAI `stream_options.include_usage` final chunk;
+  Anthropic `message_start` + final `message_delta` merge; OpenRouter
+  `usage.cost` authoritative (Q14). Tokenizer-free estimation
+  (`pricing.ts`) ONLY for pre-flight reservation and aborted streams.
+  One ledger currency (default EUR); USD costs convert at the explicit
+  operator-set `MANDARE_USD_PER_LEDGER_UNIT` (never an invented FX rate).
+  `provisioning.ts`: OpenRouter per-agent capped keys (Q14, create/rotate/
+  disable) — mock-tested, live deferred to the founder's account.
+- **`apps/cli`**: `mandare verify --spend` renders the spend trail (INTENT
+  reserve / RESULT settle / DENIED refusals) and re-derives counters from the
+  ledger, comparing them against the stored projection — the user-facing
+  replay(ledger) == counters check; stale/divergent exits 1.
+- **Red-team additions** (all in CI via `pnpm red-team`): `budget-race`
+  (N concurrent calls, cap provably never pierced — exact admission counts on
+  SQLite AND Postgres), `hostile-input` (R4: meter-blinding, prototype
+  poisoning, type confusion — forced `ajv coerceTypes: false`), `provider-
+  failure` (hangs, garbage bodies, lying usage, mid-stream death — all fail
+  closed, never 0-settle a real spend), and `projection-race` in the ledger
+  (driver-level race + tamper-invariant on Postgres).
+- **The demo** (`scripts/demo-runaway.mjs`, `pnpm demo`, CI job): a scripted
+  runaway makes 71 calls under a €20/day mandate, call #72's reservation is
+  refused, the refusal is a ledger entry, and `mandare verify --spend` proves
+  chain VALID + counters == replay. The script ASSERTS all of it (R7).
+  Terminal capture: `docs/demos/S2-runaway-demo.txt`.
+- **Live provider smoke** (`scripts/live-smoke.mjs`, local only, never CI):
+  real Haiku non-stream + stream + one OpenAI call under a €0.50 mandate.
+  PASSED 2026-07-21 (Anthropic key + OpenAI key from `.env`; the true-up
+  path settled real token costs, ledger verified). CI stays mock/no-secrets.
+- Supporting: `scripts/dev-mandate.mjs` (Ed25519-signed dev mandates),
+  updated `smoke.mjs` for the mandated gateway, `.env.example`, root
+  CLAUDE.md "Publicity boundary" section, README/package-CLAUDE.md refresh.
+
+### Decisions (S2 latitude; BUILD-DECISIONS untouched)
+
+1. **Budget counters = ledger projection with reserve/settle** (the strategy
+   frame, implemented as directed): pre-call check RESERVES the estimate;
+   result SETTLES the true cost. Reservation runs inside the append
+   transaction under the write lock, which kills the concurrent-overshoot
+   race by construction — not statistically, structurally. Chosen over
+   "derive spend by scanning the ledger each call" (the S1 honest default):
+   the reservation semantics REQUIRE a running counter to reserve against,
+   and a full-scan-per-call cannot hold an in-flight reservation.
+2. **DENIED entries** (`llm.call.denied`): refusals are recorded on the
+   ledger (with the refused estimate as `cost.amount`, zero counter effect)
+   so `mandare verify` shows the no, not just the yeses. New action type,
+   additive — `packages/spec` frozen contract untouched (action.type is an
+   open string; the schema didn't change).
+3. **One ledger currency + explicit USD rate.** Provider costs are USD;
+   mandates are usually EUR. Rather than an implicit/invented FX rate (a
+   silent spend error waiting to happen), the operator sets
+   `MANDARE_USD_PER_LEDGER_UNIT` explicitly; absent it on a non-USD ledger,
+   the spend path stays closed (R1). Mandate-currency ≠ ledger-currency also
+   fails closed.
+4. **Conservative settlement on unknown outcomes.** Provider fetch failure,
+   body-read failure, or aborted stream → settle at the reserved estimate (or
+   observed-token estimate), NEVER 0. "Outcome unknown" must not reopen the
+   cap; a Storno correction reconciles later against provider billing.
+   Provider 4xx/5xx (not billed) settle 0 and release the reservation.
+5. **Native provider protocols, not a unified API.** Agents point their
+   existing Anthropic/OpenAI SDK base URL at the gateway; we proxy the native
+   wire shape and only inject the usage-accounting flags (Q16). Portkey's
+   transforms weren't needed — the pass-through + usage-tee is smaller.
+6. **coerceTypes OFF** at the Fastify/ajv boundary: `stream: "true"` must be
+   a 400, not a silently-coerced boolean. The schema is a policy boundary
+   (R4), proven by the hostile-input red-team.
+7. **Anthropic base-URL convention excludes `/v1`** (matches the official
+   SDK's `ANTHROPIC_BASE_URL`); the adapter path carries `/v1/messages`.
+   OpenAI/OpenRouter base URLs include `/v1`. (Caught by the live smoke: an
+   operator `ANTHROPIC_BASE_URL=https://api.anthropic.com` was resolving to
+   `/messages` → 404. Regression test added.)
+
+### Review pass (Code Reviewer subagent, full S2 diff)
+
+1 HIGH + 3 MEDIUM + 3 LOW; reservation race, license direction, key leakage,
+and 0-settle paths explicitly confirmed clean. Fixed same-session:
+
+- **(HIGH)** a 200 whose body read failed mid-stream (timeout/reset after
+  headers) left the intent unpaired and the gateway un-halted. Now settles
+  conservatively at the reserved estimate; added a Fastify error handler so
+  5xx bodies are generic (no raw exception text to callers, R2).
+- **(MEDIUM)** double-settle guard was blind after a ZERO-cost settlement
+  (provider errors settle 0). The intent marker now carries an explicit
+  settled flag (`intents=1`); any second result for it is refused.
+- **(MEDIUM)** tamper-evidence could be downgraded to "stale" (→ silent
+  rebuild, evidence erased) by rewinding `projection_meta`.
+  `verifySpendProjection` now diffs stored-vs-replay counters REGARDLESS of
+  the seq; `start.ts` auto-rebuilds only on pure staleness.
+- **(LOW)** streaming fetch gained a header-phase timeout (`AbortSignal.any`)
+  so a socket-accepting/never-responding provider can't pin a reservation.
+- **(LOW)** pg-store ROLLBACK wrapped so a dropped connection can't mask the
+  causal error.
+- **(MEDIUM, deferred to S3/S4 with a note — see handoff)** spend endpoints
+  are unauthenticated; identity is the configured `MANDARE_ACTOR`, asserted
+  not proven, and Host isn't validated (DNS-rebinding surface). Localhost
+  default + budget-bounded damage make this acceptable for S2; real actor
+  identity is explicitly S4 (passports), and a gateway bearer token + Host
+  check is the smallest S3 hardening.
+- **(LOW, accepted)** aborted-stream settlement counts only text deltas (not
+  tool_use/thinking deltas) and the estimate ignores `tools` — both bounded
+  by the output-ceiling-dominated estimate; noted for a later pass.
+
+### Deviations from BUILD-DECISIONS
+
+None. (OpenRouter live smoke deferred per the founder's mid-session update —
+the adapter + provisioning rail are built and mock-tested; live OpenRouter
+comes when the account exists.)
+
+### Known debt (intentional, scheduled)
+
+- Gateway spend endpoints unauthenticated; actor identity static/asserted
+  (S4 passports; S3 can add a bearer token + Host check — see handoff).
+- Provider credentials still from env (S3 vault).
+- Aborted-stream token estimate ignores tool_use/thinking deltas and `tools`
+  input (conservative-enough; later pass).
+- OpenRouter rail live-untested until the founder's account exists.
+- `mandare kill <agent>` stretch goal NOT done — full kill switch is S3.
+
+---
+
+## → S3 handoff (vault + kill switch)
+
+Read BUILD-DECISIONS Q8 (keychain via @napi-rs/keyring), Q2/Q4 (SD-JWT for
+S4 mandates — not S3), and this session's decisions above. Demo target for
+S3: **a hijacked agent's credentials are un-hijackable + one command kills a
+running agent's spend.**
+
+Inherit from S2:
+
+1. **Vault** replaces env-var provider keys (R2, Q8). Provider keys and the
+   OpenRouter provisioning key move into the OS keychain (@napi-rs/keyring;
+   `key_provenance` already in every schema). The gateway reads them from the
+   vault at startup; nothing agent-reachable ever holds a raw key. The door
+   key itself (currently 0600 PEM next to the DB) should move too.
+2. **Kill switch** (`mandare kill <agent>`), the real one. S2 left the
+   mechanism latent: a gateway-level disable is a policy-engine deny gate
+   keyed by actor/mandate that flips WITHOUT a restart. Belt-and-suspenders
+   with the OpenRouter rail: `OpenRouterProvisioningClient.disableKey` stops
+   spend AT OpenRouter too (already built + mock-tested in
+   `packages/gateway/src/provisioning.ts`). Kill must be: fail-closed,
+   recorded as a ledger entry, and reversible only by an authorized
+   out-of-band action.
+3. **Gateway hardening the review flagged (small, do it here):** a
+   `MANDARE_GATEWAY_TOKEN` bearer check on the two spend routes + a `Host`
+   header allowlist (DNS-rebinding defense). Cheap, and it makes "which agent
+   spent this" mean something before passports land in S4.
+4. The reservation/settlement projection is the budget substrate the kill
+   switch rides on — a killed agent's in-flight reservations should be
+   released (or deliberately left to expire); decide and test.
+5. Keep both red-team drivers green (`pnpm red-team` now includes the S2
+   budget-race, hostile-input, provider-failure, and projection-race
+   suites). Add: kill-switch race (a call in flight when the kill lands must
+   not settle spend), and vault-miss (no key in the vault → spend path
+   closed, same as S2's no-credential path).
+
+**From the founder (one blocking-ish item, one optional):**
+- **OpenRouter account + provisioning key** whenever convenient — unblocks
+  the live OpenRouter smoke and the provisioning-rail demo (the code + mocked
+  tests are done; only live verification waits). Read from `.env` only (R2).
+- Confirm the S3 kill-switch UX: is `mandare kill <agent>` a local CLI
+  command against the door, or does it also need the (S6) witness in the
+  loop? S2 assumes local-CLI-against-the-door; flag if that's wrong.
+
+---
+
+## → S2 handoff (gateway + budgets) — ORIGINAL (superseded, kept for the record)
 
 Read BUILD-SESSION-PLAN S2 + BUILD-DECISIONS Q14 (authoritative provider
 `usage.cost`) and the policy-engine stub notes. Demo target: **a runaway agent loop dies
