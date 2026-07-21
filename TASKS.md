@@ -240,7 +240,12 @@ demo (runaway loop dies at €20) as an acceptance test.
 **Status: complete.** All exit criteria met: demo recorded + acceptance-
 tested, red-team green (old + new) on both drivers, CI green on origin, Code
 Reviewer pass done (findings fixed same session), live provider smoke passed
-against real Anthropic + OpenAI. S0+S1 red-team floor untouched and green.
+against real Anthropic + OpenAI + **OpenRouter** (the founder supplied the
+OpenRouter key post-review; the runtime-call rail now settles from
+OpenRouter's authoritative `usage.cost` live — 4-leg live smoke green). Only
+the provisioning-KEY rail (creating per-agent capped keys) still awaits the
+founder's provisioning key; the runtime rail is live-verified. S0+S1
+red-team floor untouched and green.
 
 ### Done
 
@@ -411,6 +416,25 @@ Inherit from S2:
    `packages/gateway/src/provisioning.ts`). Kill must be: fail-closed,
    recorded as a ledger entry, and reversible only by an authorized
    out-of-band action.
+
+   **FOUNDER RULING (2026-07-22) — the kill-switch authority model, binding:**
+   the **local CLI against the door IS the authority**, and this is
+   architecturally required, not just acceptable: the kill switch must NEVER
+   depend on the cloud — it works offline, fails closed, and a kill that
+   needs a network round-trip is a kill that can be jammed. So S3 builds the
+   authoritative kill as a purely local door operation. The S6 witness
+   service later becomes an ADDITIONAL remote-trigger channel (kill from
+   phone/dashboard, fleet-wide fan-out across nodes, published revocation
+   status for external verifiers) — but it is never the authority and never a
+   dependency. **Concrete S3 obligation:** design the revocation-status
+   representation now so S6 can PUBLISH it without changing S3's semantics —
+   i.e. the local kill writes a revocation record whose shape/meaning is
+   already the one an external verifier will later consume (align with the
+   W3C bitstring status list direction from BUILD-DECISIONS Q4, which S4 uses
+   for mandate revocation — reuse that status-list shape for agent/door kill
+   so there is one revocation vocabulary, not two). The kill must also beat
+   the shortest credential TTL (a killed agent whose token is still valid for
+   N seconds is not yet killed) — a note for when S3 vault tokens get TTLs.
 3. **Gateway hardening the review flagged (small, do it here):** a
    `MANDARE_GATEWAY_TOKEN` bearer check on the two spend routes + a `Host`
    header allowlist (DNS-rebinding defense). Cheap, and it makes "which agent
@@ -424,13 +448,17 @@ Inherit from S2:
    not settle spend), and vault-miss (no key in the vault → spend path
    closed, same as S2's no-credential path).
 
-**From the founder (one blocking-ish item, one optional):**
-- **OpenRouter account + provisioning key** whenever convenient — unblocks
-  the live OpenRouter smoke and the provisioning-rail demo (the code + mocked
-  tests are done; only live verification waits). Read from `.env` only (R2).
-- Confirm the S3 kill-switch UX: is `mandare kill <agent>` a local CLI
-  command against the door, or does it also need the (S6) witness in the
-  loop? S2 assumes local-CLI-against-the-door; flag if that's wrong.
+**From the founder — RESOLVED (2026-07-22):**
+- ✅ **OpenRouter runtime key supplied** and live-verified (4-leg live smoke
+  green; runtime rail settles OpenRouter's authoritative `usage.cost`). Key
+  in `.env` only (R2), never committed. STILL PENDING: the OpenRouter
+  **provisioning** key (creates per-agent capped keys) — the provisioning
+  code + mocked tests are done, only live provisioning verification waits.
+- ✅ **Kill-switch UX confirmed:** local CLI against the door = authority
+  (offline, fail-closed, un-jammable); S6 witness = additional remote-trigger
+  + fleet-propagation channel, never the authority. Full ruling folded into
+  S3 item 2 above, including the S3 obligation to design revocation status so
+  S6 can publish it unchanged.
 
 ---
 

@@ -7,6 +7,8 @@
  *   - Anthropic (required): one non-streaming + one streaming Haiku call,
  *     max_tokens 64, under a €0.50 mandate.
  *   - OpenAI (optional, if OPENAI_API_KEY is set): one gpt-4o-mini call.
+ *   - OpenRouter (optional, if OPENROUTER_API_KEY is set): one call routed
+ *     through the runtime rail — its response cost is authoritative (Q14).
  *
  * R2: keys stay in env vars handed to the child process; this script never
  * prints them, and the assertions below would fail the run if a key ever
@@ -62,34 +64,52 @@ execFileSync(
   { stdio: 'inherit' }
 );
 
-gateway = spawn('node', [join(root, 'packages/gateway/dist/start.js')], {
-  env: {
-    ...env,
-    MANDARE_MANDATE_PATH: mandatePath,
-    MANDARE_LEDGER_DB: dbPath,
-    MANDARE_GATEWAY_PORT: '0',
-    MANDARE_LEDGER_CURRENCY: 'EUR',
-    MANDARE_USD_PER_LEDGER_UNIT: '1.08',
-  },
-  stdio: ['ignore', 'pipe', 'inherit'],
-});
-const gatewayUrl = await new Promise((resolve, reject) => {
-  let output = '';
-  gateway.stdout.on('data', (chunk) => {
-    output += chunk;
-    if (String(chunk).includes(env.ANTHROPIC_API_KEY)) {
-      reject(new Error('gateway printed a credential (R2 violation)'));
-    }
-    const match = output.match(/listening on (http:\/\/[\d.]+:\d+)/);
-    if (match) resolve(match[1]);
+// A gateway shares ONE chat provider for /v1/chat/completions, so each
+// chat-rail leg gets its own short-lived gateway (Anthropic is on its own
+// /v1/messages endpoint and rides whichever gateway is up).
+const secretValues = [env.ANTHROPIC_API_KEY, env.OPENAI_API_KEY, env.OPENROUTER_API_KEY].filter(
+  Boolean
+);
+async function startGateway(extraEnv) {
+  const proc = spawn('node', [join(root, 'packages/gateway/dist/start.js')], {
+    env: {
+      ...env,
+      MANDARE_MANDATE_PATH: mandatePath,
+      MANDARE_LEDGER_DB: dbPath,
+      MANDARE_GATEWAY_PORT: '0',
+      MANDARE_LEDGER_CURRENCY: 'EUR',
+      MANDARE_USD_PER_LEDGER_UNIT: '1.08',
+      ...extraEnv,
+    },
+    stdio: ['ignore', 'pipe', 'inherit'],
   });
-  gateway.on('exit', (code) => reject(new Error(`gateway exited early (code ${code})`)));
-});
-console.log(`[live] gateway on ${gatewayUrl}`);
+  const url = await new Promise((resolve, reject) => {
+    let output = '';
+    proc.stdout.on('data', (chunk) => {
+      output += chunk;
+      if (secretValues.some((secret) => String(chunk).includes(secret))) {
+        reject(new Error('gateway printed a credential (R2 violation)'));
+      }
+      const match = output.match(/listening on (http:\/\/[\d.]+:\d+)/);
+      if (match) resolve(match[1]);
+    });
+    proc.on('exit', (code) => reject(new Error(`gateway exited early (code ${code})`)));
+  });
+  return { proc, url };
+}
+async function stopGateway(handle) {
+  handle.proc.kill('SIGTERM');
+  await new Promise((resolve) => handle.proc.on('exit', resolve));
+}
 
-// 1. Real Anthropic call, non-streaming.
 const HAIKU = 'claude-haiku-4-5';
-const nonStream = await fetch(`${gatewayUrl}/v1/messages`, {
+
+// 1+2. Anthropic (own endpoint), non-streaming + streaming true-up path.
+let handle = await startGateway({ MANDARE_CHAT_PROVIDER: 'openai' });
+gateway = handle.proc;
+console.log(`[live] gateway on ${handle.url} (chat rail: openai)`);
+
+const nonStream = await fetch(`${handle.url}/v1/messages`, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
   body: JSON.stringify({
@@ -102,8 +122,7 @@ const nonStreamBody = await nonStream.json();
 if (nonStream.status !== 200) fail(`anthropic non-stream: ${nonStream.status} ${JSON.stringify(nonStreamBody)}`);
 console.log(`[live] anthropic non-stream: "${nonStreamBody.content?.[0]?.text ?? '?'}"`);
 
-// 2. Real Anthropic call, STREAMING (the S2 true-up path).
-const streamResponse = await fetch(`${gatewayUrl}/v1/messages`, {
+const streamResponse = await fetch(`${handle.url}/v1/messages`, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
   body: JSON.stringify({
@@ -119,9 +138,9 @@ if (!streamText.includes('message_start')) fail('stream carried no message_start
 if (!streamText.includes(': x-mandare-result-entry')) fail('stream missing result-entry trailer');
 console.log('[live] anthropic stream: passed through, usage teed, result entry in trailer');
 
-// 3. Optional OpenAI call.
+// 3. OpenAI direct (chat rail = openai on this gateway).
 if (env.OPENAI_API_KEY) {
-  const openai = await fetch(`${gatewayUrl}/v1/chat/completions`, {
+  const openai = await fetch(`${handle.url}/v1/chat/completions`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -135,10 +154,33 @@ if (env.OPENAI_API_KEY) {
 } else {
   console.log('[live] OPENAI_API_KEY empty — skipping the OpenAI leg');
 }
-
-gateway.kill('SIGTERM');
-await new Promise((resolve) => gateway.on('exit', resolve));
+await stopGateway(handle);
 gateway = null;
+
+// 4. OpenRouter rail (chat rail = openrouter): authoritative usage.cost (Q14).
+if (env.OPENROUTER_API_KEY) {
+  handle = await startGateway({ MANDARE_CHAT_PROVIDER: 'openrouter' });
+  gateway = handle.proc;
+  const openrouter = await fetch(`${handle.url}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      // A cheap, always-available OpenRouter model id.
+      model: 'openai/gpt-4o-mini',
+      max_tokens: 32,
+      messages: [{ role: 'user', content: 'Reply with exactly: ok' }],
+    }),
+  });
+  const body = await openrouter.json();
+  if (openrouter.status !== 200) fail(`openrouter: ${openrouter.status} ${JSON.stringify(body)}`);
+  console.log(
+    `[live] openrouter rail: ok (authoritative usage.cost = ${JSON.stringify(body.usage?.cost ?? 'n/a')})`
+  );
+  await stopGateway(handle);
+  gateway = null;
+} else {
+  console.log('[live] OPENROUTER_API_KEY empty — skipping the OpenRouter leg');
+}
 
 // 4. Proof.
 const verify = execFileSync(
@@ -149,7 +191,9 @@ const verify = execFileSync(
 console.log(verify.trim().split('\n').map((line) => `[verify] ${line}`).join('\n'));
 if (!verify.includes('chain:    VALID')) fail('chain not VALID');
 if (!verify.includes('counters: CONSISTENT')) fail('counters not CONSISTENT');
-if (verify.includes(env.ANTHROPIC_API_KEY)) fail('credential appeared in verify output (R2)');
+if (secretValues.some((secret) => verify.includes(secret))) {
+  fail('a credential appeared in verify output (R2)');
+}
 
 rmSync(workDir, { recursive: true, force: true });
-console.log('\nLIVE SMOKE PASS: real Haiku calls metered, true-up settled, ledger verified.');
+console.log('\nLIVE SMOKE PASS: real provider calls metered, true-up settled, ledger verified.');
