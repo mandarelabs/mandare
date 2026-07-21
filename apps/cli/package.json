@@ -22,10 +22,10 @@
   },
   "dependencies": {
     "@mandarelabs/ledger": "workspace:*",
+    "@mandarelabs/spec": "workspace:*",
     "@mandarelabs/verifier": "workspace:*"
   },
   "devDependencies": {
-    "@mandarelabs/spec": "workspace:*",
     "vitest": "^3.0.0"
   }
 }

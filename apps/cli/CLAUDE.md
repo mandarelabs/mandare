@@ -1,17 +1,21 @@
 # @mandarelabs/cli (AGPL-3.0-only)
 
-The `mandare` binary. S0: `verify` only.
+The `mandare` binary. S1 surface: `verify`, `directory`.
 
 ```
-mandare verify --db <path> [--door-key <hex>] [--json]
+mandare verify --db <path> [--door-key <hex>] [--key-directory <path|url>]
+               [--prev-head <size>:<root>] [--prove <seq>] [--json]
+mandare directory --key <pem> [--key ...] [--role door] [--nbf s] [--exp s] [--out f]
 ```
 
-Without `--door-key`, verification is SELF-ANCHORED (door key read from the
-ledger file itself): it proves internal consistency, NOT authorship — a
-file-level attacker can re-sign the chain under a swapped key (see the
-key-swap red-team test). The output says so; keep it. `--door-key` supplies
-the raw Ed25519 public key from an independent source (key directory — S1;
-witnessed heads — S6).
+Without `--door-key`/`--key-directory`, verification is SELF-ANCHORED (door
+key read from the ledger file itself): it proves internal consistency, NOT
+authorship — a file-level attacker can re-sign the chain under a swapped key
+(see the key-swap red-team test). The output says so; keep it. The key
+directory (docs/KEY-DIRECTORY.md) is the canonical out-of-band anchor and
+adds multi-door + rotation checks. `--prev-head` turns a recorded RFC 6962
+tree head into rollback/rewrite detection; `--prove` emits inclusion proofs
+for selective disclosure.
 
 Exit codes are contract: 0 = chain valid · 1 = invalid/error · 2 = usage.
 The smoke test and future CI/insurer tooling script against them.
