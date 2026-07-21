@@ -1,0 +1,28 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**"]
+    },
+    "typecheck": {
+      "dependsOn": ["^build"]
+    },
+    "lint": {},
+    "test": {
+      "dependsOn": ["build"]
+    },
+    "red-team": {
+      "dependsOn": ["build"]
+    }
+  },
+  "boundaries": {
+    "tags": {
+      "license:apache": {
+        "dependencies": {
+          "allow": ["license:apache"]
+        }
+      }
+    }
+  }
+}

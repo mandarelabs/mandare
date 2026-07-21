@@ -1,0 +1,7 @@
+packages:
+  - packages/*
+  - apps/*
+
+# Supply-chain posture (BUILD-DECISIONS Q24): dependency cooldown — never install
+# a version published less than 3 days ago (2025 npm-worm lesson).
+minimumReleaseAge: 4320

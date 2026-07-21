@@ -1,0 +1,13 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.turbo/
+coverage/
+.env
+.env.*
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.doorkey.pem
+.DS_Store
