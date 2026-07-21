@@ -156,7 +156,10 @@ async function applyResult(kv: CounterKV, entry: LedgerEntryV1): Promise<void> {
       `result entry seq ${entry.seq} settles intent ${intentHash.slice(0, 12)}… which has no reservation marker — projection corrupt`
     );
   }
-  if (marker.reservedMicros === 0 && marker.settledMicros > 0) {
+  // `intents === 1` is the explicit settled flag: a zero-cost settlement
+  // (provider error) must be just as final as a paid one, or a duplicate
+  // result could re-add spend while replay stays "consistent".
+  if (marker.intents !== 0) {
     throw new ProjectionIntegrityError(
       `intent ${intentHash.slice(0, 12)}… is already settled — duplicate result entry (fail-closed)`
     );
@@ -176,7 +179,7 @@ async function applyResult(kv: CounterKV, entry: LedgerEntryV1): Promise<void> {
   await kv.putCounter(intentKey(intentHash), {
     reservedMicros: 0,
     settledMicros: settled,
-    intents: 0,
+    intents: 1, // settled flag — see the duplicate-result guard above
   });
 }
 

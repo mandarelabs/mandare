@@ -109,6 +109,18 @@ export async function provisionPgLedger(
   }
 }
 
+/**
+ * ROLLBACK that never masks the causal error: if the connection is already
+ * gone, the rollback throws too, and we must surface the ORIGINAL failure.
+ */
+async function rollbackQuietly(client: pg.PoolClient): Promise<void> {
+  try {
+    await client.query('ROLLBACK');
+  } catch {
+    // The transaction is aborted regardless; the caller rethrows the cause.
+  }
+}
+
 export class PgStore implements LedgerStore {
   private readonly pool: pg.Pool;
 
@@ -148,7 +160,7 @@ export class PgStore implements LedgerStore {
       await client.query('COMMIT');
       return entry;
     } catch (error) {
-      await client.query('ROLLBACK');
+      await rollbackQuietly(client);
       throw error;
     } finally {
       client.release();
@@ -179,13 +191,13 @@ export class PgStore implements LedgerStore {
       });
       if (result.kind === 'refused') {
         // A refused reservation aborts EVERYTHING: no entry, no counter change.
-        await client.query('ROLLBACK');
+        await rollbackQuietly(client);
         return result;
       }
       await client.query('COMMIT');
       return result;
     } catch (error) {
-      await client.query('ROLLBACK');
+      await rollbackQuietly(client);
       throw error;
     } finally {
       client.release();
@@ -204,7 +216,7 @@ export class PgStore implements LedgerStore {
       await client.query('COMMIT');
       return result;
     } catch (error) {
-      await client.query('ROLLBACK');
+      await rollbackQuietly(client);
       throw error;
     } finally {
       client.release();
@@ -234,7 +246,7 @@ export class PgStore implements LedgerStore {
       }
       await client.query('COMMIT');
     } catch (error) {
-      await client.query('ROLLBACK');
+      await rollbackQuietly(client);
       throw error;
     } finally {
       client.release();

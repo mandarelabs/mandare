@@ -126,6 +126,18 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
   // 400, not a silent boolean (R4; caught by the hostile-input red-team).
   const app = Fastify({ logger: false, ajv: { customOptions: { coerceTypes: false } } });
 
+  // No raw exception text ever reaches a caller: 5xx bodies are generic
+  // (an unaudited error channel is how secrets leak, R2); 4xx keep
+  // Fastify's own client-facing messages (validation, parse, body-size).
+  app.setErrorHandler((error: { statusCode?: number; message?: string }, request, reply) => {
+    const statusCode = typeof error.statusCode === 'number' ? error.statusCode : 500;
+    if (statusCode >= 500) {
+      request.log?.error?.(error);
+      return reply.code(500).send({ error: 'internal error' });
+    }
+    return reply.code(statusCode).send({ error: error.message ?? 'request error' });
+  });
+
   const spendPathOpen = (): boolean =>
     !halted &&
     mandate !== null &&
@@ -374,7 +386,13 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
         method: 'POST',
         headers: adapter.headers(endpoint.apiKey),
         body: JSON.stringify(adapter.prepareBody(body, stream)),
-        signal: stream ? abort.signal : AbortSignal.timeout(timeouts.nonStreamMs),
+        // Streaming: the caller's abort plus a header-phase timeout, so a
+        // provider that accepts the socket but never responds cannot pin the
+        // request (and its reservation) forever. The per-chunk idle timeout
+        // takes over once the stream body starts.
+        signal: stream
+          ? AbortSignal.any([abort.signal, AbortSignal.timeout(timeouts.streamIdleMs)])
+          : AbortSignal.timeout(timeouts.nonStreamMs),
       });
     } catch (error) {
       // The fetch failed — but that does NOT prove nothing executed: a
@@ -411,7 +429,28 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
     upstream: Response,
     reply: FastifyReply
   ): Promise<unknown> {
-    const bodyText = await upstream.text();
+    let bodyText: string;
+    try {
+      bodyText = await upstream.text();
+    } catch (error) {
+      // Headers arrived but the body read died (timeout mid-body, socket
+      // reset) — the provider executed and may have billed. Same conservative
+      // contract as a failed fetch: settle at the reserved estimate, never
+      // leave an intent unpaired (R3) and never treat unknown as free (R1).
+      const errorName = error instanceof Error ? error.name : 'UnknownError';
+      const settled = await settleOrHalt(intent, plan.requestHash, {
+        responseHash: sha256Hex(`provider-body-read-error:${errorName}:outcome-unknown`),
+        costMicros: plan.estimateLedgerMicros,
+        tokensIn: 0,
+        tokensOut: 0,
+      });
+      if (settled === null) {
+        return replyHalted(reply, intent);
+      }
+      return reply.code(502).send({
+        error: `provider response body could not be read (${errorName}); outcome unknown — settled at the reserved estimate pending reconciliation`,
+      });
+    }
     const usage = upstream.ok ? plan.adapter.parseUsageFromJson(bodyText) : null;
     // Provider errors (4xx/5xx) are not billed — settle 0 and release the
     // reservation. A 200 with no parseable usage settles at the estimate

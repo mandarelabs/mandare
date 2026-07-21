@@ -26,7 +26,7 @@ export interface ProjectionRunner {
 
 export type ProjectionVerdict =
   | { ok: true; counters: number }
-  | { ok: false; reason: string; divergences: ProjectionDivergence[] };
+  | { ok: false; stale: boolean; reason: string; divergences: ProjectionDivergence[] };
 
 /** Rebuild the counter table from the ledger alone (the ground truth). */
 export async function rebuildSpendProjection(store: ProjectionRunner): Promise<void> {
@@ -50,21 +50,31 @@ export async function verifySpendProjection(store: ProjectionRunner): Promise<Pr
   return store.runProjection(async (tx) => {
     const headSeq = (await tx.head())?.seq ?? 0;
     const projectionSeq = await tx.getProjectionSeq();
-    if (projectionSeq !== headSeq) {
-      return {
-        ok: false,
-        reason: `projection is at seq ${projectionSeq} but the ledger head is ${headSeq} (stale)`,
-        divergences: [],
-      };
-    }
+    const stale = projectionSeq !== headSeq;
+    // ALWAYS diff stored vs. a fresh replay, even when the seq looks stale:
+    // projection_meta is mutable, so an attacker who tampers with the
+    // counters could also rewind the seq to disguise value divergence as
+    // mere staleness — which would trigger a silent rebuild that erases the
+    // evidence. Value divergence is reported regardless of the seq.
     const stored = await tx.readAllCounters();
     const replayed = await replaySpendCounters(await tx.readAllEntries());
     const divergences = diffProjection(stored, replayed);
     if (divergences.length > 0) {
       return {
         ok: false,
-        reason: `${divergences.length} counter(s) diverge from a fresh ledger replay — tampering or projection bug`,
+        stale,
+        reason:
+          `${divergences.length} counter(s) diverge from a fresh ledger replay — tampering or projection bug` +
+          (stale ? ` (projection also at seq ${projectionSeq}, head ${headSeq})` : ''),
         divergences,
+      };
+    }
+    if (stale) {
+      return {
+        ok: false,
+        stale: true,
+        reason: `projection is at seq ${projectionSeq} but the ledger head is ${headSeq} (stale); counters otherwise match the ledger`,
+        divergences: [],
       };
     }
     return { ok: true, counters: stored.size };

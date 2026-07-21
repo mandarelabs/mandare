@@ -209,6 +209,20 @@ describe('fail-closed integrity', () => {
     await ledger.close();
   });
 
+  test('a ZERO-cost settlement is still final — a second result cannot re-add spend', async () => {
+    // Provider-error settlements are 0; the settled flag must not depend on
+    // a positive amount, or a duplicate result would double-count silently
+    // while replay stays "consistent".
+    const { ledger } = await openLedger();
+    const reserved = await reserve(ledger, 5000);
+    const intentHash = reserved.kind === 'appended' ? reserved.entry.entry_hash : '';
+    await ledger.appendProjected(resultInput(intentHash, 0), spendProjector());
+    await expect(
+      ledger.appendProjected(resultInput(intentHash, 4000), spendProjector())
+    ).rejects.toThrow(ProjectionIntegrityError);
+    await ledger.close();
+  });
+
   test('a result for an unknown intent is refused (fail-closed)', async () => {
     const { ledger } = await openLedger();
     await expect(
@@ -231,6 +245,29 @@ describe('fail-closed integrity', () => {
     const verdict = await verifySpendProjection(store);
     expect(verdict.ok).toBe(false);
     if (!verdict.ok) {
+      expect(verdict.divergences.map((d) => d.key)).toContain(totalKey(MANDATE));
+    }
+    await ledger.close();
+  });
+
+  test('tampering CANNOT be disguised as staleness by also rewinding the projection seq', async () => {
+    // The evidence-preservation control (divergence → refuse, don't rebuild)
+    // must not be selectable by an attacker who rewinds projection_meta.
+    const { ledger, store, dbPath } = await openLedger();
+    const reserved = await reserve(ledger, 5000);
+    const intentHash = reserved.kind === 'appended' ? reserved.entry.entry_hash : '';
+    await ledger.appendProjected(resultInput(intentHash, 5000), spendProjector());
+
+    const db = openSqliteDatabase(dbPath);
+    db.exec(`UPDATE budget_counters SET settled_micros = 0 WHERE scope_key = '${totalKey(MANDATE)}'`);
+    // …and rewind the projection seq, trying to make it look merely stale.
+    db.exec(`UPDATE projection_meta SET value = 0 WHERE key = 'spend_projection_seq'`);
+    db.close();
+
+    const verdict = await verifySpendProjection(store);
+    expect(verdict.ok).toBe(false);
+    if (!verdict.ok) {
+      // Divergence is still reported (not silently swallowed as staleness).
       expect(verdict.divergences.map((d) => d.key)).toContain(totalKey(MANDATE));
     }
     await ledger.close();

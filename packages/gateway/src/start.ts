@@ -16,9 +16,11 @@ const ledger = await AsyncLedger.open(store, {
   keyPath: `${config.ledgerDbPath}.doorkey.pem`,
 });
 
-// Projection integrity gate (R1): stale → rebuild from the ledger (the
-// ground truth) and say so; value divergence → REFUSE to start, because
-// silently rebuilding would erase the evidence of tampering.
+// Projection integrity gate (R1): PURE staleness (counters still match the
+// ledger, only the seq lags) → rebuild from the ledger and say so. ANY value
+// divergence → REFUSE to start, because silently rebuilding would erase the
+// evidence of tampering — and the verdict diffs values even when the seq
+// looks stale, so a rewound seq cannot disguise divergence as staleness.
 const verdict = await verifySpendProjection(ledger);
 if (!verdict.ok) {
   if (verdict.divergences.length > 0 && process.env.MANDARE_REBUILD_PROJECTION !== '1') {
