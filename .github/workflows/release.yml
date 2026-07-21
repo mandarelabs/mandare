@@ -1,0 +1,38 @@
+# Signed-release workflow — STUB (S0). Completed before the first published
+# release (S9), per BUILD-DECISIONS Q24/Q25:
+#
+#   - npm Trusted Publishing (OIDC): `npm publish --provenance` with NO tokens;
+#     npm package settings: disallow token publishing, require 2FA.
+#   - SLSA Build L3 via the reusable slsa-github-generator workflow;
+#     verify with `gh attestation verify`.
+#   - Docker images: cosign keyless + actions/attest-build-provenance → GHCR.
+#   - Trigger becomes tag push (v*) instead of workflow_dispatch.
+#   - REPRODUCING.md documents the rebuild path (no bit-for-bit claim).
+name: Release (stub)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # OIDC for npm Trusted Publishing — kept here so nobody forgets
+
+jobs:
+  dry-run:
+    name: build + pack dry-run (no publish)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+          registry-url: 'https://registry.npmjs.org'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm test
+      - name: Pack every workspace package (dry run)
+        run: pnpm -r exec npm pack --dry-run
+      - name: Publish placeholder
+        run: echo "TODO(S9) — npm publish --provenance via Trusted Publishing; SLSA attestation; cosign. See file header."
