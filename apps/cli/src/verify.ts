@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { readLedger } from '@mandarelabs/ledger';
 
 import { buildSpendReport, type SpendReport } from './spend-report.js';
+import { buildRevocationReport, type RevocationReport } from './revocation-report.js';
 import {
   computeTreeHead,
   consistencyProof,
@@ -45,6 +46,7 @@ export interface VerifyCommandOutput {
     consistency?: ConsistencyStatus;
     inclusion_proof?: InclusionProofOutput;
     spend?: SpendReport['json'];
+    revocations?: RevocationReport['json'];
   };
 }
 
@@ -123,6 +125,8 @@ export async function runVerify(
   options: VerifyOptions = {}
 ): Promise<VerifyCommandOutput> {
   const { meta, entries } = readLedger(dbPath);
+  // iat for the status-list render only (does not affect the bitstring bytes).
+  const nowSeconds = Math.floor(Date.now() / 1000);
   // Out-of-band anchors beat the file's self-declared key: an attacker with
   // file access can re-sign the chain under a swapped key, so
   // meta.door_public_key only proves internal consistency, not authorship.
@@ -207,6 +211,17 @@ export async function runVerify(
     lines.push(...spendReport.lines);
     json.spend = spendReport.json;
     if (!spendReport.countersConsistent) {
+      exitCode = 1;
+    }
+  }
+
+  // Revocation is always surfaced when a ledger has kills — a killed agent is
+  // never something to hide behind a flag. Empty ledgers add no output.
+  const revocationReport = await buildRevocationReport(dbPath, entries, nowSeconds);
+  if (!revocationReport.empty) {
+    lines.push(...revocationReport.lines);
+    json.revocations = revocationReport.json;
+    if (!revocationReport.consistent) {
       exitCode = 1;
     }
   }

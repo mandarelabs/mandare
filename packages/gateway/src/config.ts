@@ -15,6 +15,16 @@ export interface ProviderEndpoint {
   apiKey: string | null;
 }
 
+/**
+ * Door-local authentication mode for the spend routes (S3, closing the S2
+ * review's deferred MEDIUM). `token` requires a vault-issued proof-of-
+ * possession token; `none` is the S2 localhost-only behavior; `auto`
+ * (default) requires a token IFF a vault is wired — "if you have a vault, the
+ * door authenticates." Full actor identity is still S4 (passports): a valid
+ * token proves an authorized holder minted it for this door, not yet WHO.
+ */
+export type GatewayAuthMode = 'auto' | 'token' | 'none';
+
 export interface GatewayConfig {
   host: string;
   port: number;
@@ -22,6 +32,14 @@ export interface GatewayConfig {
   doorId: string;
   /** S2: static door actor identity; real passports land in S4. */
   actor: string;
+  /** Spend-route auth mode (see GatewayAuthMode). */
+  authMode: GatewayAuthMode;
+  /**
+   * Extra Host-header values allowed on top of the localhost defaults
+   * (DNS-rebinding defense). The gateway is a local door; a browser tricked
+   * into POSTing to a rebound hostname must not reach the spend routes.
+   */
+  allowedHosts: string[];
   /** Path to the mandate JSON; null = NO mandate → spend path closed (R1). */
   mandatePath: string | null;
   /** Currency every ledger cost/budget is denominated in. */
@@ -83,6 +101,15 @@ export function loadConfigFromEnv(env: Record<string, string | undefined>): Gate
       ? 1
       : positiveNumber(env.MANDARE_USD_PER_LEDGER_UNIT, 'MANDARE_USD_PER_LEDGER_UNIT');
 
+  const authModeRaw = env.MANDARE_GATEWAY_AUTH ?? 'auto';
+  if (authModeRaw !== 'auto' && authModeRaw !== 'token' && authModeRaw !== 'none') {
+    throw new Error(`invalid MANDARE_GATEWAY_AUTH: ${authModeRaw} (expected 'auto', 'token', or 'none')`);
+  }
+  const allowedHosts = (env.MANDARE_GATEWAY_ALLOWED_HOSTS ?? '')
+    .split(',')
+    .map((host) => host.trim().toLowerCase())
+    .filter((host) => host.length > 0);
+
   const openrouterKey = env.OPENROUTER_API_KEY ?? null;
   const chatProvider =
     env.MANDARE_CHAT_PROVIDER === 'openai' || env.MANDARE_CHAT_PROVIDER === 'openrouter'
@@ -98,6 +125,8 @@ export function loadConfigFromEnv(env: Record<string, string | undefined>): Gate
     ledgerDbPath: env.MANDARE_LEDGER_DB ?? './mandare-ledger.db',
     doorId: env.MANDARE_DOOR_ID ?? 'gateway:local',
     actor: env.MANDARE_ACTOR ?? 'did:mandare:dev-agent',
+    authMode: authModeRaw,
+    allowedHosts,
     mandatePath: env.MANDARE_MANDATE_PATH ?? null,
     ledgerCurrency,
     usdPerLedgerUnit,

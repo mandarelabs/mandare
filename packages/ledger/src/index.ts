@@ -16,9 +16,39 @@ export {
   newMetaRows,
   runProjectedAppend,
 } from './store.js';
-export type { AppendProjectedResult, LedgerStore, ProjectionTx, Projector } from './store.js';
-export { loadOrCreateDoorKey } from './door-key.js';
+export type {
+  AppendProjectedResult,
+  LedgerStore,
+  ProjectionKV,
+  ProjectionTx,
+  Projector,
+  RevocationKV,
+  RevocationRecord,
+} from './store.js';
+export { loadOrCreateDoorKey, doorKeyFromPem, generateDoorKeyPem } from './door-key.js';
 export type { DoorKey } from './door-key.js';
+export {
+  AGENT_REVOKE,
+  AGENT_REINSTATE,
+  agentSubject,
+  doorSubject,
+  mandateSubject,
+  applyRevocationEntry,
+  revocationProjector,
+  replayRevocation,
+  diffRevocation,
+  MapRevocationKV,
+} from './revocation.js';
+export type { RevocationDivergence } from './revocation.js';
+export {
+  readRevocationRecord,
+  isSubjectRevoked,
+  listRevocations,
+  rebuildRevocationProjection,
+  verifyRevocationProjection,
+  readRevocationProjectionSqlite,
+} from './revocation-ledger.js';
+export type { RevocationVerdict } from './revocation-ledger.js';
 export {
   EMPTY_COUNTER,
   LLM_CALL_DENIED,

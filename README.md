@@ -26,18 +26,30 @@ actually did.
   (per-tx / per-day / per-task / total + velocity) → counterparty →
   approval threshold. Cedar-shaped interface; checks that cannot run yet
   fail *closed*.
+- **Vault** (`packages/vault`) — the credential door. Third-party keys and the
+  door signing key live in the OS keychain (`@napi-rs/keyring`), encrypted at
+  rest; agents never see a raw secret. It mints short-lived (≤30-min)
+  proof-of-possession scoped tokens: a leaked token id without its secret is
+  dead paper, replays are refused, and a kill makes it dead instantly.
+- **Kill switch** (`mandare kill <agent>`) — the LOCAL, offline, un-jammable
+  authority. It writes an `agent.revoke` entry to the ledger and flips a
+  revocation projection in the same transaction; the gateway fails closed on
+  its very next request, with no network round-trip. The revocation is an IETF
+  Token Status List bitstring — the same vocabulary a witness service later
+  publishes for external verifiers.
 - **Ledger** (`packages/ledger`) — append-only SQLite/Postgres store, every
-  entry hash-chained and Ed25519-signed. Budget counters are a derived
-  projection of the ledger, rebuildable from it and continuously checkable
-  against a fresh replay (`mandare verify --spend`).
+  entry hash-chained and Ed25519-signed. Budget counters AND revocation state
+  are derived projections of the ledger, rebuildable from it and continuously
+  checkable against a fresh replay (`mandare verify --spend`).
 - **Verifier** (`packages/verifier`, Apache-2.0) — pure chain verification
   anyone can embed, including parties who distrust us.
 - **Spec** (`packages/spec`, Apache-2.0) — the typed mandate and ledger-entry
   schemas. An open contract.
 - **CLI** (`apps/cli`) — `mandare verify --db <path>` (RFC 6962 tree heads,
   `--key-directory`, `--prev-head` rollback detection, `--prove` inclusion
-  proofs, `--spend` trail + counter invariant) and `mandare directory`
-  (publish door keys as an RFC 9421-style JWKS — `docs/KEY-DIRECTORY.md`).
+  proofs, `--spend` trail + counter invariant, plus the revocation trail +
+  status list), `mandare kill`/`reinstate`/`token`/`vault`, and `mandare
+  directory` (publish door keys as an RFC 9421-style JWKS — `docs/KEY-DIRECTORY.md`).
 
 ## The demo: a runaway loop dies at €20
 
@@ -50,6 +62,20 @@ A scripted runaway agent hammers the gateway under a €20/day mandate. Call
 #72 is refused mid-loop, the refusal itself becomes a ledger entry, and
 `mandare verify --spend` proves the chain AND that the budget counters equal
 a fresh replay of the ledger. Captured run: `docs/demos/S2-runaway-demo.txt`.
+
+## The demo: a stolen token is dead paper
+
+```bash
+pnpm demo:dead-paper
+```
+
+An agent authenticates with a short-lived vault-issued proof-of-possession
+token (the provider key stays in the vault). A thief who exfiltrates the token
+id is refused (no secret → no proof); a captured request can't be replayed
+(single-use nonce); then `mandare kill` mid-task makes the running agent's very
+next call fail closed — the refusal lands on the ledger, and `mandare verify`
+proves chain + spend + revocation all equal a fresh replay. Local authority, no
+cloud. Captured run: `docs/demos/S3-dead-paper-demo.txt`.
 
 ## Quickstart (your own keys)
 

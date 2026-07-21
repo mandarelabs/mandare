@@ -394,7 +394,217 @@ comes when the account exists.)
 
 ---
 
-## → S3 handoff (vault + kill switch)
+## S3 — Vault + kill switch (2026-07-22)
+
+**Scope (per S2 handoff + founder ruling):** `packages/vault` (OS-keychain
+credential storage, credential injection, short-lived scoped tokens,
+revocation status list, `mandare kill`) · gateway consumes vault credentials +
+checks revocation per request · door-local auth for spend routes (S2's
+deferred MEDIUM) · Demo 2 "stolen token is dead paper" as a CI acceptance test.
+
+**Status: complete.** All exit criteria met: Demo 2 scripted + in CI; red-team
+additions green on both drivers (token theft, replay, post-kill access,
+keychain-unavailable fail-closed); Code Reviewer pass done (2 HIGH + 3 MEDIUM +
+2 LOW, all fixed same session); full gate green (build/typecheck/lint/test/
+red-team/smoke/demo/demo:dead-paper). S0–S2 red-team floor and Demo 1 untouched
+and green.
+
+### Done
+
+- **`packages/vault`** (AGPL) — the credential door. A 32-byte MASTER KEY lives
+  in the OS keychain (`@napi-rs/keyring`, Q8) and encrypts every secret in the
+  vault SQLite DB (`crypto.ts`: AES-256-GCM, the account name as AAD so a
+  DB-file attacker cannot move a provider-key ciphertext into the door-key
+  slot). Holds provider keys, the OpenRouter provisioning key, the door signing
+  key PEM, and the scoped-token registry. **Keychain-or-fail-closed** (R1):
+  `MANDARE_VAULT_BACKEND=keychain` (default) + keychain unavailable ⇒
+  `VaultKeychainUnavailableError`, never a silent plaintext fallback; headless/
+  CI opt into `file` (0600 master-key file, enforced on read). `key_provenance`
+  becomes `keychain`/`software` accordingly and flows into every ledger entry's
+  `door_signature`.
+- **Scoped tokens** (`tokens.ts`) — short-lived (≤30-min, SPEC ceiling)
+  proof-of-possession tokens: a public id + a per-token HMAC secret `k`. Each
+  request carries `HMAC(k, tokenId|method|path|timestamp|nonce)`. Verify order:
+  known → not revoked → not expired → timestamp fresh (±120s) → PoP matches
+  (constant-time) → nonce claimed (single-use, claimed only AFTER the PoP
+  verifies so a bad-PoP probe can't burn a client's nonce). This is the S3
+  precursor to S4's RFC 9421 request signatures.
+- **Revocation as a ledger projection** (`packages/ledger/revocation.ts` +
+  `revocation-ledger.ts`) — `agent.revoke` / `agent.reinstate` entries drive a
+  subject-keyed `revocation_status` table, mirroring the S2 spend projection:
+  `replay(ledger) == revocation_status` is the invariant. Status indices are
+  assigned in ledger order (deterministic on rebuild). Shares the projection
+  seq with the spend counters; spend and revoke entries are disjoint types, so
+  the two projections stay mutually consistent under interleaving (proven).
+  Both SQLite and Postgres drivers (grants + table added to `provisionPgLedger`).
+- **ONE revocation vocabulary** — the IETF Token Status List / W3C Bitstring
+  Status List (`@sd-jwt/jwt-status-list`, Q4). `vault/status-list.ts` renders
+  the projection into the standard `status_list: {bits, lst}` payload S6 will
+  publish unchanged; `revocation_ref = statuslist:<listId>#<index>` (already in
+  the mandate schema). Enforcement never touches the bitstring — the gateway
+  reads the subject-keyed table directly (fast, offline, dep-free).
+- **`mandare kill <agent>` / `kill --all` / `reinstate`** (`apps/cli`) — the
+  LOCAL, offline, un-jammable authority (founder ruling). Appends the revoke
+  entry AND flips the projection in one `BEGIN IMMEDIATE` transaction, then
+  tells the vault to stop honoring the actor's tokens (belt-and-suspenders).
+  The door key is sourced exactly as the gateway sources it (vault in vault
+  mode, legacy 0600 PEM otherwise), so kill is operable in either mode.
+- **Gateway door-local auth + kill enforcement** (`server.ts`, `auth.ts`) — a
+  Host-header allowlist (DNS-rebinding defense, localhost by default) always
+  on; a per-request revocation check (agent + door subjects) via the ledger
+  projection, run BEFORE token auth so a killed agent's refusal lands on the
+  ledger as a DENIED entry even when its vault token is also revoked; then a
+  proof-of-possession token check (required when a vault is wired; `authMode`
+  = `auto`/`token`/`none`). Provider keys are sourced from the vault at
+  startup (`MANDARE_VAULT=1`); nothing agent-reachable holds a raw key.
+  Non-loopback bind without token auth refuses to start.
+- **`mandare verify`** now renders the kill trail, the IETF status-list
+  bitstring, and the `replay(ledger) == revocation` invariant (exits 1 on
+  divergence). `mandare token issue` mints tokens; `mandare vault import-env` /
+  `list` bootstrap and inspect the vault (names only, never values).
+- **Demo 2** (`scripts/demo-dead-paper.mjs`, `pnpm demo:dead-paper`, CI job):
+  real vault + real PoP signing end to end — legitimate call works; token id
+  without the secret → BAD_POP; captured request replay → REPLAYED_NONCE;
+  `mandare kill` mid-task → next valid call → 403 AGENT_REVOKED with the
+  refusal on the ledger; `mandare verify` proves chain + spend + revocation ==
+  replay. The script ASSERTS all of it (R7). Capture:
+  `docs/demos/S3-dead-paper-demo.txt`.
+- **Red-team additions** (CI via `pnpm red-team`): `vault/keychain-unavailable`
+  (keychain backend + unavailable ⇒ fail closed, no plaintext fallback);
+  `gateway/token-theft` (real vault: binding, replay, cross-actor, post-kill,
+  vault-belt). Plus `ledger/revocation` + `gateway/auth-and-kill` unit suites.
+
+### Decisions (S3 latitude; BUILD-DECISIONS untouched)
+
+1. **Master key in the keychain, encrypted DB for everything else.** Keychains
+   are awkward for many/short-lived items, so the keychain holds ONE
+   high-value key and the vault DB stores every secret as AES-256-GCM
+   ciphertext under it. Genuinely uses the keychain (Q8) and matches SPEC
+   §3.1 "encrypted at rest; keys in OS keychain/KMS."
+2. **Scoped tokens are proof-of-possession, not bearer.** "Dead paper" is a
+   real property, not a slogan: a leaked token id can't be used without `k`
+   (binding), a captured request can't be replayed (single-use nonce + skew),
+   and TTL + kill close the rest. HMAC now, the passport's asymmetric key in
+   S4 — the preimage is the deliberate precursor.
+3. **Revocation = ledger projection, reusing the S2 pattern exactly.** The
+   authoritative record is the `agent.revoke` ledger entry; the status table
+   and the bitstring are both derived, so they can't drift and both carry the
+   same tamper-evidence as the spend counters.
+4. **Kill check runs BEFORE token auth** so the refusal is always recorded on
+   the ledger (the demo/audit requirement), even though the kill also revokes
+   the vault token. Bounded post-kill DENIED-flood via an in-memory throttle
+   (≤1 recorded kill-refusal/sec) so a looping killed agent can't amplify
+   fsync'd writes.
+5. **Door key moved into the vault** (provenance `keychain`); the legacy 0600
+   PEM path is retained so the frozen S0–S2 demos run unchanged.
+6. **"If you have a vault, the door authenticates"** — `authMode: auto`
+   requires a token iff a vault is wired, keeping Demo 1 (env keys, no vault)
+   green while making real deployments authenticated by default.
+
+### Deviations from BUILD-DECISIONS
+
+None. (`@sd-jwt/jwt-status-list` is the Q4-decided library; `@napi-rs/keyring`
+the Q8 one. Both ship prebuilt platform binaries — no install scripts, so the
+supply-chain posture is unchanged; `@sd-jwt/jwt-status-list@0.19.0` carries a
+deprecation notice but is the cooldown-eligible version and API-stable for our
+use.)
+
+### Review pass (Code Reviewer subagent, full S3 diff)
+
+2 HIGH + 3 MEDIUM + 2 LOW. Core crypto (GCM/AAD/IV, constant-time PoP),
+projector type-widening, projection integrity (`replay == projection`, shared
+seq), fail-closed paths, concurrency, and R2 secret-handling explicitly
+confirmed clean. Fixed same-session:
+
+- **(HIGH-1)** PoP preimage does not cover the request body — an agent→door
+  interceptor could swap the body under a valid proof. Loopback-mitigated
+  (needs privileged local interception); the docstring's "binding" claim was
+  corrected to POSSESSION+REPLAY and the body-digest scoped to S4 (RFC 9421
+  Content-Digest), which is where the asymmetric agent key lands anyway.
+- **(HIGH-2)** `mandare kill` was inoperable when the gateway ran in LEGACY
+  mode: the CLI always took the door key from the vault, the gateway from a
+  PEM ⇒ key mismatch ⇒ append refused. `openDoorContext` now resolves the key
+  exactly as the gateway does (vault vs PEM); legacy-mode kill test added.
+- **(MEDIUM-3)** nonce retention (125s) was shorter than the worst-case replay
+  horizon (up to 240s), latent until pruning was wired. Retention → 2×skew;
+  opportunistic prune (every 256 verifies) wired so the nonce table stays
+  bounded AND replay-safe.
+- **(MEDIUM-4)** post-kill DENIED entries were appended pre-auth and
+  unthrottled — a looping killed agent could flood the append-only ledger.
+  Now coalesced to ≤1 recorded kill-refusal/sec.
+- **(MEDIUM-5)** the file-backend master key was read without checking its
+  permissions. Now fails closed on anything looser than 0600 (POSIX); test
+  added.
+- **(LOW-6)** keychain "absent vs unavailable" was decided by error-message
+  substring — fragile, could silently re-key. The real keyring returns `null`
+  for absent and throws only on unavailability, so ANY throw is now fail-closed.
+- **(LOW-7)** `0.0.0.0` removed from the Host allowlist defaults; a non-loopback
+  bind without token auth now refuses to start.
+
+### Known debt (intentional, scheduled)
+
+- PoP does not bind the request body — S4 adds an RFC 9421 Content-Digest with
+  the passport's asymmetric agent key (loopback-mitigated until then).
+- The OpenRouter provisioning `disableKey` belt is not wired into `mandare
+  kill` yet — it needs a per-agent key-hash mapping and the founder's
+  provisioning key. The LOCAL authority (ledger revoke + vault token revoke) is
+  complete without it.
+- Nonce pruning is opportunistic (every 256 verifies); fine for a local door.
+- Actor identity is still the static `config.actor`; a valid token proves an
+  authorized HOLDER, not WHO — S4 passports.
+- S6 will PUBLISH the status list unchanged and add a remote kill-trigger /
+  fleet-fan-out channel — never the authority, never a dependency.
+
+---
+
+## → S4 handoff (mandates + approvals)
+
+Read BUILD-DECISIONS Q2 (`@sd-jwt/core` + `@sd-jwt/sd-jwt-vc` for credentials)
+and Q4 (`@sd-jwt/jwt-status-list` — the SAME library S3 already uses), SPEC §4
+(Passport) + §5 (approvals/CIBA), and the S3 decisions above. Demo target for
+S4: **the human signs ONE mandate and rubber-stamps nothing; above-threshold
+spend waits for one async approval; a revoked mandate is refused instantly.**
+
+Inherit from S3:
+
+1. **Mandate transport = SD-JWT VC** (Q2): verify the OWNER signature on the
+   mandate (v0 trusts the operator-configured file; `packages/spec` mandate
+   schema is FROZEN and already carries `revocation_ref` +
+   `key_provenance`). The gateway's `loadMandate` is the seam.
+2. **Reuse the S3 revocation vocabulary for MANDATE revocation** — this is the
+   whole point of the "one vocabulary" ruling. Mandates get a status-list
+   index; the gateway's per-request kill check already reads agent + door
+   subjects (`server.ts`), so ADD `mandateSubject(mandate.id)` to that check
+   and let `mandare kill --mandate <id>` (or the passport flow) revoke it. One
+   revocation projection, more subject namespaces — no new machinery.
+3. **Passport identity replaces the static actor.** The PoP token's HMAC `k`
+   becomes the passport's non-exportable agent key with RFC 9421 request
+   signatures, and the verified actor comes from the presented passport (not
+   `config.actor`). Add a Content-Digest over the body at the same time —
+   that closes S3's HIGH-1. The S3 token preimage
+   (`tokenId|method|path|timestamp|nonce`) is the deliberate precursor; extend
+   it, don't replace the model.
+4. **CIBA-style async approval push.** The policy engine already denies
+   above-threshold with `APPROVAL_REQUIRED` (fail-closed since S2); S4 lands
+   the push + the resume/settle path.
+5. Keep BOTH red-team drivers green (now includes the S3 vault
+   keychain-unavailable and gateway token-theft/replay/post-kill suites). Add:
+   mandate-revocation enforcement, and SD-JWT owner-signature tamper.
+
+**From the founder — needed for S4 (decisions, not blocking the first steps):**
+- **IDV/KYC partner** for the attestation flow (IDnow / Persona, EU-friendly per
+  SPEC §4) — or defer the KYC binding and stub the attestation for S4, doing
+  only the owner→agent delegation credential locally.
+- **DID method profile** for `principal`/`agent` (SPEC §4 says "DID method
+  profile lands in S4") — confirm `did:key` vs `did:web` vs a Mandare profile.
+- **Still pending from S2/S3:** the OpenRouter **provisioning** key — to
+  live-verify per-agent capped keys and wire `disableKey` into `mandare kill`
+  as the cloud belt. The runtime rail is already live-verified; only
+  provisioning waits.
+
+---
+
+## → S3 handoff (vault + kill switch) — ORIGINAL (fulfilled — see the S3 log above)
 
 Read BUILD-DECISIONS Q8 (keychain via @napi-rs/keyring), Q2/Q4 (SD-JWT for
 S4 mandates — not S3), and this session's decisions above. Demo target for

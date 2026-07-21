@@ -1,4 +1,4 @@
-import type { LedgerEntryV1 } from '@mandarelabs/spec';
+import type { KeyProvenance, LedgerEntryV1 } from '@mandarelabs/spec';
 
 import { loadOrCreateDoorKey, type DoorKey } from './door-key.js';
 import { buildEntry, type AppendInput, type LedgerHead } from './entry.js';
@@ -23,6 +23,7 @@ export class AsyncLedger {
   readonly doorId: string;
   readonly doorKeyId: string;
   readonly doorPublicKeyHex: string;
+  readonly doorKeyProvenance: KeyProvenance;
 
   private readonly store: LedgerStore;
   private readonly doorKey: DoorKey;
@@ -33,14 +34,27 @@ export class AsyncLedger {
     this.doorId = doorId;
     this.doorKeyId = doorKey.keyId;
     this.doorPublicKeyHex = doorKey.publicKeyHex;
+    this.doorKeyProvenance = doorKey.provenance;
   }
 
+  /**
+   * Open (or create) a ledger for one door. The door key comes either from a
+   * 0600 PEM file (`keyPath`, S0–S2) or pre-built by the caller from the vault
+   * (`doorKey`, S3 — OS-keychain-sourced, `provenance: 'keychain'`). Exactly
+   * one must be supplied.
+   */
   static async open(
     store: LedgerStore,
-    options: { doorId: string; keyPath: string }
+    options: { doorId: string; keyPath?: string; doorKey?: DoorKey }
   ): Promise<AsyncLedger> {
     try {
-      const doorKey = loadOrCreateDoorKey(options.keyPath);
+      const doorKey =
+        options.doorKey ??
+        (options.keyPath !== undefined
+          ? loadOrCreateDoorKey(options.keyPath)
+          : (() => {
+              throw new Error('AsyncLedger.open requires either doorKey or keyPath');
+            })());
       const ledger = new AsyncLedger(store, doorKey, options.doorId);
       const existingRows = await store.readMetaRows();
       if (existingRows === null) {

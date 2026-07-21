@@ -5,6 +5,34 @@ import type { LedgerHead } from './entry.js';
 import type { CounterKV, ProjectionRefusal, SpendCounter } from './projection.js';
 
 /**
+ * A subject's revocation state, a projection of `agent.revoke`/`agent.reinstate`
+ * ledger entries. The subject is an agent/mandate/door identifier; the status
+ * index is its stable slot in the bitstring status list (assigned in ledger
+ * order on first revocation). Like the spend counters this is DERIVED — a
+ * fresh replay of the ledger must reproduce it exactly (integrity invariant).
+ */
+export interface RevocationRecord {
+  subject: string;
+  revoked: boolean;
+  statusIndex: number;
+  /** ts of the entry that last changed this subject's status. */
+  updatedAt: string;
+  /** entry_hash of that entry — the tamper-evident anchor for the kill. */
+  entryHash: string;
+}
+
+/** Revocation-projection view inside one store transaction (drivers implement). */
+export interface RevocationKV {
+  getRevocation(subject: string): Promise<RevocationRecord | null>;
+  putRevocation(record: RevocationRecord): Promise<void>;
+  /** Return the next free status-list index and advance the allocator. */
+  allocateStatusIndex(): Promise<number>;
+}
+
+/** What a projector receives: both the spend counters and revocation state. */
+export interface ProjectionKV extends CounterKV, RevocationKV {}
+
+/**
  * The thin driver interface behind the ledger (BUILD-DECISIONS Q7): SQLite
  * for solo mode, Postgres for team mode. A store persists rows — chain
  * semantics (hashing, signing, validation) live above it in the ledger and
@@ -31,12 +59,12 @@ export type AppendProjectedResult =
   | { kind: 'refused'; refusal: ProjectionRefusal };
 
 export type Projector = (
-  kv: CounterKV,
+  kv: ProjectionKV,
   entry: LedgerEntryV1
 ) => Promise<ProjectionRefusal | null>;
 
-/** Counter-table view inside one store transaction (drivers implement). */
-export interface ProjectionTx extends CounterKV {
+/** Projection-table view inside one store transaction (drivers implement). */
+export interface ProjectionTx extends ProjectionKV {
   head(): Promise<LedgerHead | null>;
   /** Seq of the last entry the projection has applied; 0 for a fresh table. */
   getProjectionSeq(): Promise<number>;
@@ -44,6 +72,9 @@ export interface ProjectionTx extends CounterKV {
   clearCounters(): Promise<void>;
   readAllEntries(): Promise<unknown[]>;
   readAllCounters(): Promise<Map<string, SpendCounter>>;
+  /** All revocation records, for rebuild/verify. */
+  readAllRevocations(): Promise<RevocationRecord[]>;
+  clearRevocations(): Promise<void>;
 }
 
 /** The projection lags or leads the ledger — every caller must fail closed (R1). */

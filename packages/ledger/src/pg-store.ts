@@ -10,6 +10,7 @@ import {
   type LedgerStore,
   type ProjectionTx,
   type Projector,
+  type RevocationRecord,
 } from './store.js';
 
 /**
@@ -73,6 +74,16 @@ CREATE TABLE IF NOT EXISTS budget_counters (
   settled_micros  BIGINT NOT NULL,
   intents         BIGINT NOT NULL
 );
+-- Revocation PROJECTION (S3): kill-switch state derived from the ledger's
+-- agent.revoke / agent.reinstate entries — mutable/rebuildable, integrity
+-- from replay(ledger) == this table, not from storage locks.
+CREATE TABLE IF NOT EXISTS revocation_status (
+  subject      TEXT PRIMARY KEY,
+  revoked      BOOLEAN NOT NULL,
+  status_index BIGINT NOT NULL,
+  updated_at   TEXT NOT NULL,
+  entry_hash   TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS projection_meta (
   key   TEXT PRIMARY KEY,
   value BIGINT NOT NULL
@@ -80,6 +91,7 @@ CREATE TABLE IF NOT EXISTS projection_meta (
 `;
 
 const PROJECTION_SEQ_KEY = 'spend_projection_seq';
+const REVOCATION_INDEX_KEY = 'revocation_next_index';
 
 /**
  * One-time admin provisioning: schema, append-only triggers, and the
@@ -98,11 +110,13 @@ export async function provisionPgLedger(
     const role = client.escapeIdentifier(options.appRole);
     await client.query(`REVOKE ALL ON ledger_entries, ledger_meta FROM ${role};`);
     await client.query(`GRANT SELECT, INSERT ON ledger_entries, ledger_meta TO ${role};`);
-    // The projection is a mutable derived table — the app role may maintain
-    // it (incl. DELETE for rebuilds). The LEDGER grants above stay INSERT-only.
-    await client.query(`REVOKE ALL ON budget_counters, projection_meta FROM ${role};`);
+    // The projections are mutable derived tables — the app role may maintain
+    // them (incl. DELETE for rebuilds). The LEDGER grants above stay INSERT-only.
     await client.query(
-      `GRANT SELECT, INSERT, UPDATE, DELETE ON budget_counters, projection_meta TO ${role};`
+      `REVOKE ALL ON budget_counters, revocation_status, projection_meta FROM ${role};`
+    );
+    await client.query(
+      `GRANT SELECT, INSERT, UPDATE, DELETE ON budget_counters, revocation_status, projection_meta TO ${role};`
     );
   } finally {
     await client.end();
@@ -347,6 +361,72 @@ function projectionTxWithClient(client: pg.PoolClient): ProjectionTx {
         });
       }
       return counters;
+    },
+    getRevocation: async (subject) => {
+      const result = await client.query<{
+        revoked: boolean;
+        status_index: string;
+        updated_at: string;
+        entry_hash: string;
+      }>(
+        'SELECT revoked, status_index, updated_at, entry_hash FROM revocation_status WHERE subject = $1',
+        [subject]
+      );
+      const row = result.rows[0];
+      return row === undefined
+        ? null
+        : {
+            subject,
+            revoked: row.revoked,
+            statusIndex: Number(row.status_index),
+            updatedAt: row.updated_at,
+            entryHash: row.entry_hash,
+          };
+    },
+    putRevocation: async (record: RevocationRecord) => {
+      await client.query(
+        `INSERT INTO revocation_status (subject, revoked, status_index, updated_at, entry_hash)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (subject) DO UPDATE SET
+           revoked = EXCLUDED.revoked,
+           status_index = EXCLUDED.status_index,
+           updated_at = EXCLUDED.updated_at,
+           entry_hash = EXCLUDED.entry_hash`,
+        [record.subject, record.revoked, record.statusIndex, record.updatedAt, record.entryHash]
+      );
+    },
+    allocateStatusIndex: async () => {
+      const result = await client.query<{ value: string }>(
+        'SELECT value FROM projection_meta WHERE key = $1',
+        [REVOCATION_INDEX_KEY]
+      );
+      const next = result.rows[0] === undefined ? 0 : Number(result.rows[0].value);
+      await client.query(
+        `INSERT INTO projection_meta (key, value) VALUES ($1, $2)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+        [REVOCATION_INDEX_KEY, next + 1]
+      );
+      return next;
+    },
+    readAllRevocations: async () => {
+      const result = await client.query<{
+        subject: string;
+        revoked: boolean;
+        status_index: string;
+        updated_at: string;
+        entry_hash: string;
+      }>('SELECT subject, revoked, status_index, updated_at, entry_hash FROM revocation_status');
+      return result.rows.map((row) => ({
+        subject: row.subject,
+        revoked: row.revoked,
+        statusIndex: Number(row.status_index),
+        updatedAt: row.updated_at,
+        entryHash: row.entry_hash,
+      }));
+    },
+    clearRevocations: async () => {
+      await client.query('DELETE FROM revocation_status');
+      await client.query('DELETE FROM projection_meta WHERE key = $1', [REVOCATION_INDEX_KEY]);
     },
   };
 }

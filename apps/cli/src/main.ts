@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 import { buildDirectory } from './directory.js';
+import { runKill, runReinstate } from './kill.js';
+import { runTokenIssue } from './token.js';
+import { runVaultImportEnv, runVaultList } from './vault-cmd.js';
 import { parsePrevHead, runVerify, type VerifyOptions } from './verify.js';
 
 const USAGE = `mandare — the accountability stack for AI agent fleets
@@ -22,6 +25,29 @@ Usage:
       Without --door-key/--key-directory, verification is self-anchored: it
       proves internal consistency, not authorship.
 
+  mandare kill <agent> [--reason <text>]
+  mandare kill --all [--reason <text>]
+      Revoke an agent's credentials (or ALL, halting the door) — the LOCAL,
+      offline, fail-closed authority. Writes an agent.revoke entry to the
+      ledger and stops the vault honoring the actor's tokens. The gateway
+      fails closed on its next request. Reads the door from the vault
+      (MANDARE_VAULT_*), the ledger from MANDARE_LEDGER_DB, door from
+      MANDARE_DOOR_ID.
+
+  mandare reinstate <agent> [--reason <text>]
+      Reverse a kill (authorized un-revocation). New tokens are honored again;
+      previously-killed tokens stay dead.
+
+  mandare token issue --actor <did> --mandate <id> [--ttl <seconds>] [--json]
+      Mint a short-lived proof-of-possession scoped token for an agent to
+      present to the gateway. The pop secret prints ONCE. TTL ≤ 30 min.
+
+  mandare vault import-env
+      One-time .env → vault bootstrap of provider keys. Remove them from .env
+      afterwards (the vault is their home).
+  mandare vault list
+      List the accounts the vault holds (names only, never values).
+
   mandare directory --key <pem> [--key <pem>...] [options]
       Build the key directory (JWKS, RFC 9421 message-signatures-directory
       profile) from door key PEMs. Publish it out-of-band; verifiers pass it
@@ -39,16 +65,19 @@ Exit codes:
 
 interface ParsedArgs {
   command: string | undefined;
+  positionals: string[];
   flags: Map<string, (string | true)[]>;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
   const [command, ...rest] = argv;
+  const positionals: string[] = [];
   const flags = new Map<string, (string | true)[]>();
   for (let i = 0; i < rest.length; i += 1) {
     const token = rest[i] as string;
     if (!token.startsWith('--')) {
-      throw new UsageError(`unexpected argument: ${token}`);
+      positionals.push(token);
+      continue;
     }
     const name = token.slice(2);
     const next = rest[i + 1];
@@ -63,7 +92,7 @@ function parseArgs(argv: string[]): ParsedArgs {
       existing.push(value);
     }
   }
-  return { command, flags };
+  return { command, positionals, flags };
 }
 
 class UsageError extends Error {}
@@ -179,8 +208,71 @@ async function runDirectoryCommand(flags: ParsedArgs['flags']): Promise<number> 
   return output.exitCode;
 }
 
+function getReason(flags: ParsedArgs['flags']): string | undefined {
+  return getString(flags, 'reason');
+}
+
+async function runKillCommand(args: ParsedArgs): Promise<number> {
+  const all = args.flags.has('all');
+  if (args.positionals.length > 1) {
+    throw new UsageError('kill takes at most one <agent> positional argument');
+  }
+  const agent = args.positionals[0];
+  if (all && agent !== undefined) {
+    throw new UsageError('kill takes EITHER <agent> OR --all, not both');
+  }
+  const reason = getReason(args.flags);
+  return runKill(process.env, {
+    ...(agent === undefined ? {} : { agent }),
+    all,
+    ...(reason === undefined ? {} : { reason }),
+  });
+}
+
+async function runReinstateCommand(args: ParsedArgs): Promise<number> {
+  if (args.positionals.length !== 1) {
+    throw new UsageError('reinstate requires exactly one <agent> positional argument');
+  }
+  const reason = getReason(args.flags);
+  return runReinstate(process.env, {
+    agent: args.positionals[0] as string,
+    ...(reason === undefined ? {} : { reason }),
+  });
+}
+
+function runTokenCommand(args: ParsedArgs): number {
+  if (args.positionals[0] !== 'issue') {
+    throw new UsageError("token subcommand must be 'issue'");
+  }
+  const actor = getString(args.flags, 'actor');
+  const mandate = getString(args.flags, 'mandate');
+  const ttlRaw = getString(args.flags, 'ttl');
+  const ttlSeconds = ttlRaw === undefined ? undefined : Number.parseInt(ttlRaw, 10);
+  if (ttlRaw !== undefined && (ttlSeconds === undefined || String(ttlSeconds) !== ttlRaw)) {
+    throw new UsageError('--ttl must be an integer number of seconds');
+  }
+  return runTokenIssue(process.env, {
+    ...(actor === undefined ? {} : { actor }),
+    ...(mandate === undefined ? {} : { mandate }),
+    ...(ttlSeconds === undefined ? {} : { ttlSeconds }),
+    json: args.flags.has('json'),
+  });
+}
+
+function runVaultCommand(args: ParsedArgs): number {
+  const sub = args.positionals[0];
+  if (sub === 'import-env') {
+    return runVaultImportEnv(process.env);
+  }
+  if (sub === 'list') {
+    return runVaultList(process.env);
+  }
+  throw new UsageError("vault subcommand must be 'import-env' or 'list'");
+}
+
 async function main(): Promise<number> {
-  const { command, flags } = parseArgs(process.argv.slice(2));
+  const args = parseArgs(process.argv.slice(2));
+  const { command, flags } = args;
 
   if (command === undefined || command === 'help' || flags.has('help')) {
     process.stdout.write(USAGE);
@@ -191,6 +283,18 @@ async function main(): Promise<number> {
   }
   if (command === 'directory') {
     return runDirectoryCommand(flags);
+  }
+  if (command === 'kill') {
+    return runKillCommand(args);
+  }
+  if (command === 'reinstate') {
+    return runReinstateCommand(args);
+  }
+  if (command === 'token') {
+    return runTokenCommand(args);
+  }
+  if (command === 'vault') {
+    return runVaultCommand(args);
   }
   throw new UsageError(`unknown command: ${command}`);
 }

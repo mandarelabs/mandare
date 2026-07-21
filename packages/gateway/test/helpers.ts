@@ -8,6 +8,7 @@ import type { MandateV1 } from '@mandarelabs/spec';
 
 import type { GatewayConfig } from '../src/config.js';
 import { buildGateway, type GatewayDeps } from '../src/server.js';
+import type { GatewayVault } from '../src/auth.js';
 import type { FetchLike } from '../src/providers/types.js';
 
 export function tempDbPath(): string {
@@ -59,6 +60,10 @@ export function testConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfi
     ledgerDbPath: tempDbPath(),
     doorId: 'gateway:test',
     actor: 'did:example:agent',
+    // Default to S2 behavior for the frozen suite: no vault wired ⇒ 'auto'
+    // requires no token. Auth-specific tests opt in via overrides.
+    authMode: 'auto',
+    allowedHosts: [],
     mandatePath: null,
     ledgerCurrency: 'EUR',
     // 1 USD per EUR keeps test arithmetic transparent (1 USD micro = 1 EUR micro).
@@ -89,6 +94,7 @@ export async function openTestGateway(options: {
   fetchImpl?: FetchLike;
   ledgerOverride?: GatewayDeps['ledger'];
   timeouts?: GatewayDeps['timeouts'];
+  vault?: GatewayVault;
 } = {}): Promise<TestGateway> {
   const config = testConfig(options.config);
   const store = SqliteStore.open(config.ledgerDbPath);
@@ -108,6 +114,7 @@ export async function openTestGateway(options: {
     ledger: options.ledgerOverride ?? ledger,
     policy,
     mandate,
+    ...(options.vault === undefined ? {} : { vault: options.vault }),
     ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
     ...(options.timeouts === undefined ? {} : { timeouts: options.timeouts }),
   });

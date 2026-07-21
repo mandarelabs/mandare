@@ -10,6 +10,7 @@ import {
   type LedgerStore,
   type ProjectionTx,
   type Projector,
+  type RevocationRecord,
 } from './store.js';
 
 /**
@@ -52,6 +53,16 @@ CREATE TABLE IF NOT EXISTS budget_counters (
   settled_micros  INTEGER NOT NULL,
   intents         INTEGER NOT NULL
 ) STRICT;
+-- Revocation PROJECTION (S3): kill-switch state derived from agent.revoke /
+-- agent.reinstate entries — also mutable/rebuildable, integrity from
+-- replay(ledger) == this table, not from storage locks.
+CREATE TABLE IF NOT EXISTS revocation_status (
+  subject      TEXT PRIMARY KEY,
+  revoked      INTEGER NOT NULL,
+  status_index INTEGER NOT NULL,
+  updated_at   TEXT NOT NULL,
+  entry_hash   TEXT NOT NULL
+) STRICT;
 CREATE TABLE IF NOT EXISTS projection_meta (
   key   TEXT PRIMARY KEY,
   value INTEGER NOT NULL
@@ -59,6 +70,7 @@ CREATE TABLE IF NOT EXISTS projection_meta (
 `;
 
 const PROJECTION_SEQ_KEY = 'spend_projection_seq';
+const REVOCATION_INDEX_KEY = 'revocation_next_index';
 
 /**
  * Open the SQLite database with the ledger schema, append-only triggers, and
@@ -290,6 +302,85 @@ export class SqliteStore implements LedgerStore {
           });
         }
         return Promise.resolve(counters);
+      },
+      getRevocation: (subject) => {
+        const row = this.db
+          .prepare(
+            'SELECT revoked, status_index, updated_at, entry_hash FROM revocation_status WHERE subject = ?'
+          )
+          .get(subject) as
+          | { revoked: number; status_index: number; updated_at: string; entry_hash: string }
+          | undefined;
+        return Promise.resolve(
+          row === undefined
+            ? null
+            : {
+                subject,
+                revoked: row.revoked !== 0,
+                statusIndex: row.status_index,
+                updatedAt: row.updated_at,
+                entryHash: row.entry_hash,
+              }
+        );
+      },
+      putRevocation: (record: RevocationRecord) => {
+        this.db
+          .prepare(
+            `INSERT INTO revocation_status (subject, revoked, status_index, updated_at, entry_hash)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(subject) DO UPDATE SET
+               revoked = excluded.revoked,
+               status_index = excluded.status_index,
+               updated_at = excluded.updated_at,
+               entry_hash = excluded.entry_hash`
+          )
+          .run(
+            record.subject,
+            record.revoked ? 1 : 0,
+            record.statusIndex,
+            record.updatedAt,
+            record.entryHash
+          );
+        return Promise.resolve();
+      },
+      allocateStatusIndex: () => {
+        const row = this.db
+          .prepare('SELECT value FROM projection_meta WHERE key = ?')
+          .get(REVOCATION_INDEX_KEY) as { value: number } | undefined;
+        const next = row?.value ?? 0;
+        this.db
+          .prepare(
+            'INSERT INTO projection_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
+          )
+          .run(REVOCATION_INDEX_KEY, next + 1);
+        return Promise.resolve(next);
+      },
+      readAllRevocations: () => {
+        const rows = this.db
+          .prepare(
+            'SELECT subject, revoked, status_index, updated_at, entry_hash FROM revocation_status'
+          )
+          .all() as {
+          subject: string;
+          revoked: number;
+          status_index: number;
+          updated_at: string;
+          entry_hash: string;
+        }[];
+        return Promise.resolve(
+          rows.map((row) => ({
+            subject: row.subject,
+            revoked: row.revoked !== 0,
+            statusIndex: row.status_index,
+            updatedAt: row.updated_at,
+            entryHash: row.entry_hash,
+          }))
+        );
+      },
+      clearRevocations: () => {
+        this.db.exec('DELETE FROM revocation_status;');
+        this.db.prepare('DELETE FROM projection_meta WHERE key = ?').run(REVOCATION_INDEX_KEY);
+        return Promise.resolve();
       },
     };
   }

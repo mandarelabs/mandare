@@ -23,6 +23,7 @@
   "dependencies": {
     "@mandarelabs/ledger": "workspace:*",
     "@mandarelabs/spec": "workspace:*",
+    "@mandarelabs/vault": "workspace:*",
     "@mandarelabs/verifier": "workspace:*"
   },
   "devDependencies": {

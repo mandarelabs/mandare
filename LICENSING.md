@@ -21,7 +21,7 @@ Each Apache package carries its own `LICENSE` and `NOTICE` file and declares
 ## AGPL-3.0-only packages
 
 Everything not listed above, currently: `packages/ledger`, `packages/gateway`,
-`apps/cli`.
+`packages/vault`, `apps/cli`.
 
 ## Import direction (enforced)
 

@@ -13,12 +13,15 @@ import {
 } from '@mandarelabs/spec';
 import {
   LLM_CALL_DENIED,
+  agentSubject,
+  doorSubject,
   readSpendSnapshot,
   spendProjector,
   type AppendInput,
   type AppendProjectedResult,
   type ProjectionRunner,
   type Projector,
+  type RevocationRecord,
   type SpendGuardView,
 } from '@mandarelabs/ledger';
 import {
@@ -30,6 +33,12 @@ import {
 import type { SpendScope } from '@mandarelabs/spec';
 
 import type { GatewayConfig, ProviderEndpoint } from './config.js';
+import {
+  buildAllowedHosts,
+  extractRequestClaims,
+  isHostAllowed,
+  type GatewayVault,
+} from './auth.js';
 import {
   estimateUsdMicros,
   findPricing,
@@ -55,6 +64,12 @@ export interface GatewayDeps {
   policy: PolicyEngine;
   /** null = no mandate → the spend path is CLOSED (R1), never allow-all. */
   mandate: MandateV1 | null;
+  /**
+   * The vault door (S3). When present, spend routes require a valid
+   * proof-of-possession token minted by it (unless authMode='none'). When
+   * absent, auth falls back to authMode (S2 localhost-only for 'none'/'auto').
+   */
+  vault?: GatewayVault;
   pricingTable?: readonly ModelPricing[];
   fetchImpl?: FetchLike;
   /** Test hook: production values are the module constants. */
@@ -76,6 +91,14 @@ export interface GatewayDeps {
 
 const NON_STREAM_TIMEOUT_MS = 120_000;
 const STREAM_IDLE_TIMEOUT_MS = 120_000;
+/**
+ * A killed agent's process may keep looping (SPEC: the process runs, the doors
+ * close). We record the kill-refusal for evidence, but coalesce it so a fast
+ * loop cannot flood the append-only ledger with one fsync'd DENIED per retry:
+ * at most one recorded kill-refusal per this window; the rest are refused
+ * without a ledger write.
+ */
+const REVOKED_DENIED_THROTTLE_MS = 1_000;
 
 const chatCompletionsBodySchema = Type.Object(
   {
@@ -113,7 +136,7 @@ interface CallPlan {
 }
 
 export function buildGateway(deps: GatewayDeps): FastifyInstance {
-  const { config, ledger, policy, mandate } = deps;
+  const { config, ledger, policy, mandate, vault } = deps;
   const pricingTable = deps.pricingTable ?? DEFAULT_PRICING;
   const fetchImpl = deps.fetchImpl ?? (fetch as FetchLike);
   const timeouts = deps.timeouts ?? {
@@ -121,10 +144,29 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
     streamIdleMs: STREAM_IDLE_TIMEOUT_MS,
   };
   let halted = false;
+  // Last time a kill-refusal was recorded to the ledger (throttle, see above).
+  let lastRevokedDeniedAt = 0;
+
+  // "If you have a vault, the door authenticates." authMode='token' forces it
+  // even without a vault (⇒ every spend request fails closed until one is
+  // wired); 'none' is the S2 localhost-only behavior.
+  const requireToken =
+    config.authMode === 'token' || (config.authMode === 'auto' && vault !== undefined);
+  const allowedHosts = buildAllowedHosts(config);
 
   // coerceTypes OFF: this is a policy boundary — `stream: "true"` must be a
   // 400, not a silent boolean (R4; caught by the hostile-input red-team).
   const app = Fastify({ logger: false, ajv: { customOptions: { coerceTypes: false } } });
+
+  // DNS-rebinding defense: reject any request whose Host header is not a
+  // known-local name before it can reach a route (S2 review hardening).
+  app.addHook('onRequest', (request, reply, done) => {
+    if (!isHostAllowed(request.headers.host, allowedHosts)) {
+      reply.code(403).send({ error: 'host not allowed' });
+      return;
+    }
+    done();
+  });
 
   // No raw exception text ever reaches a caller: 5xx bodies are generic
   // (an unaudited error channel is how secrets leak, R2); 4xx keep
@@ -203,6 +245,7 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
         error: `no USD rate configured for ledger currency ${config.ledgerCurrency} — cannot meter provider costs (fail-closed); set MANDARE_USD_PER_LEDGER_UNIT`,
       });
     }
+
     const scopeSelection = selectGatewaySpendScope(mandate);
     if (scopeSelection === 'none' || scopeSelection === 'ambiguous') {
       return reply.code(503).send({
@@ -230,6 +273,78 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
 
     const pricing = findPricing(model, pricingTable);
     const providerHost = new URL(endpoint.baseUrl).host;
+
+    // Kill switch (S3): a revoked agent — or a killed door (kill --all) —
+    // fails closed on its very next call, ahead of any spend work. This is
+    // the LOCAL, offline, un-jammable authority: the gateway reads the ledger
+    // revocation projection directly, never the cloud. Fail closed if it
+    // cannot be read. The refusal is recorded so `mandare verify` shows it.
+    let revoked: { agent: RevocationRecord | null; door: RevocationRecord | null };
+    try {
+      revoked = await ledger.runProjection(async (tx) => ({
+        agent: await tx.getRevocation(agentSubject(config.actor)),
+        door: await tx.getRevocation(doorSubject(config.doorId)),
+      }));
+    } catch {
+      return reply
+        .code(503)
+        .send({ error: 'revocation status unavailable — refusing to act (fail-closed)' });
+    }
+    if (revoked.agent?.revoked === true || revoked.door?.revoked === true) {
+      const killedDoor = revoked.door?.revoked === true;
+      const code = killedDoor ? 'DOOR_REVOKED' : 'AGENT_REVOKED';
+      const reasons = [
+        killedDoor
+          ? `door '${config.doorId}' has been killed (kill --all) — every credential is revoked (fail-closed)`
+          : `agent '${config.actor}' has been killed — its credentials are revoked (fail-closed)`,
+      ];
+      // Coalesce: record the refusal for evidence, but don't let a post-kill
+      // loop amplify into an unbounded stream of fsync'd DENIED entries.
+      const nowMs = Date.now();
+      if (nowMs - lastRevokedDeniedAt < REVOKED_DENIED_THROTTLE_MS) {
+        return reply.code(403).send({ error: 'denied by policy', code, reasons });
+      }
+      lastRevokedDeniedAt = nowMs;
+      return await recordDenied(reply, {
+        requestHash,
+        target: providerHost,
+        estimateLedgerMicros: 0,
+        code,
+        reasons,
+      });
+    }
+
+    // Door-local authentication (S3): AFTER the kill check (the kill switch is
+    // the highest-priority gate, and its refusal must land on the ledger even
+    // when the vault has also revoked the token). The caller must present a
+    // valid vault proof-of-possession token scoped to THIS door's actor and
+    // mandate — a leaked token id without its secret is dead paper. Auth
+    // failures are pre-authorization rejections (401/403), not policy denials,
+    // so they do not enter the ledger (no known actor to attribute them to).
+    if (requireToken) {
+      if (vault === undefined) {
+        return reply.code(503).send({
+          error: 'token auth required but no vault is configured — spend path closed (fail-closed)',
+        });
+      }
+      const claims = extractRequestClaims(request);
+      if (claims === null) {
+        return reply.code(401).send({
+          error: 'missing proof-of-possession token headers (x-mandare-token/timestamp/nonce/pop)',
+        });
+      }
+      const verdict = vault.verifyRequest(claims);
+      if (!verdict.ok) {
+        return reply
+          .code(401)
+          .send({ error: 'token rejected', code: verdict.refusal.code, reason: verdict.refusal.reason });
+      }
+      if (verdict.verified.actor !== config.actor || verdict.verified.mandateId !== mandate.id) {
+        return reply.code(403).send({
+          error: 'token is scoped to a different actor/mandate than this door',
+        });
+      }
+    }
 
     if (pricing === null && adapter.name !== 'openrouter') {
       // No price → no metering → no spend (R1). OpenRouter is exempt: its

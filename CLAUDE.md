@@ -47,9 +47,10 @@ an explicit checklist item.
 | `packages/spec` | Apache-2.0 | **Frozen contracts**: mandate + ledger-entry schemas (TypeBox), canonical JSON, hash rules |
 | `packages/policy-engine` | Apache-2.0 | Cedar-shaped evaluation interface; S0 ships an allow-all `UnconfiguredPolicyEngine` stub |
 | `packages/verifier` | Apache-2.0 | Pure `verifyChain` — portable (WebCrypto only), embeddable by parties who distrust us |
-| `packages/ledger` | AGPL-3.0-only | Append-only SQLite store (`node:sqlite`), hash chain, Ed25519 door signing |
-| `packages/gateway` | AGPL-3.0-only | Fastify LLM proxy door: policy → intent entry → forward → result entry |
-| `apps/cli` | AGPL-3.0-only | `mandare` binary (`verify`; later `kill`, `export`) |
+| `packages/ledger` | AGPL-3.0-only | Append-only SQLite store (`node:sqlite`), hash chain, Ed25519 door signing, spend + revocation projections |
+| `packages/vault` | AGPL-3.0-only | Credential door: OS-keychain-backed encrypted store (`@napi-rs/keyring`), PoP scoped tokens, IETF status-list revocation |
+| `packages/gateway` | AGPL-3.0-only | Fastify LLM proxy door: auth → kill check → policy → intent entry → forward → result entry |
+| `apps/cli` | AGPL-3.0-only | `mandare` binary (`verify`, `kill`, `reinstate`, `token`, `vault`; later `export`) |
 | `scripts/` | — | license-boundary gate, smoke E2E, Claude hooks |
 
 **License import direction (enforced by `scripts/check-license-boundaries.mjs`
@@ -86,8 +87,10 @@ node scripts/check-license-boundaries.mjs
 Required for: any change to `packages/spec` (schema freeze) · payment-rail
 integrations (Stripe webhook flow) · anything reshaping the repo layout.
 
-## Session roadmap (S0+S1 done ⇒ next: S2)
+## Session roadmap (S0–S3 done ⇒ next: S4)
 
-S1 ledger core hardening ✓ → S2 gateway+budgets (Demo: runaway loop dies at €20)
-→ S3 vault+kill switch → S4 mandates+approvals → S5 card rail → S6
-witness+anchoring → S7 packaging/MCP/skill → S8 review → S9 launch prep.
+S1 ledger core hardening ✓ → S2 gateway+budgets (Demo: runaway loop dies at €20) ✓
+→ S3 vault+kill switch (Demo: stolen token is dead paper) ✓ → S4
+mandates+approvals (SD-JWT transport, passport identity, CIBA push) → S5 card
+rail → S6 witness+anchoring (publishes the S3 revocation status list) → S7
+packaging/MCP/skill → S8 review → S9 launch prep.

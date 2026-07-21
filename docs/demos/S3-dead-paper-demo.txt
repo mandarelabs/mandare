@@ -1,0 +1,54 @@
+════════════════════════════════════════════════════════════════════
+ MANDARE DEMO 2 — a stolen vault token is dead paper; kill halts an agent
+════════════════════════════════════════════════════════════════════
+
+[demo] mandate mnd_dev_57687de4ae13 signed for did:mandare:dev-agent.
+[demo] provider key imported into the vault; .env can now drop it (R2).
+
+[demo] gateway door up at http://127.0.0.1:52396 (vault-backed, token auth REQUIRED).
+[demo] vault minted scoped token jdGyOsRlYxcm… (expires 2026-07-21T17:54:48.621Z).
+       the agent holds the pop_secret; the gateway never does.
+
+[agent]  legitimate signed call            → 200 OK
+[thief]  stolen token id, forged proof     → 401 BAD_POP (binding: no pop secret)
+[thief]  replay of a captured request      → 401 REPLAYED_NONCE (single-use nonce)
+
+$ mandare kill did:mandare:dev-agent
+  KILLED did:mandare:dev-agent
+    subject:      agent:did:mandare:dev-agent
+    ledger entry: df0059cd23c51143857a62731806b201f4a95cffbb62c6497d82037d09414c84 (seq 3)
+    door key:     83bc50d9b97a… (provenance: software)
+    vault:        1 live token(s) revoked
+    reason:       demo: compromised agent (committed in the entry's request_hash)
+    status:       written to the LOCAL ledger — the gateway fails closed on its next request (offline, un-jammable)
+
+[agent]  valid signed call AFTER the kill  → 403 AGENT_REVOKED
+         the refusal is ledger entry 6755e6ee1d565cc9…
+
+$ mandare verify --db ledger.db --spend
+ledger:   /var/folders/wv/dslzb2wx45qdqzl4dmhhg78m0000gn/T/mandare-deadpaper-E4SOk1/ledger.db
+door:     gateway:local (key 83bc50d9b97a…)
+entries:  4
+head:     6755e6ee1d565cc9f35dc459f164a11a274b1066edd090e1f4f8f21de54c5b5c
+tree:     size=4 root=4fd9f6a392ce405a6707301eff9fb2eb60f7d98ac0673cecd7ad356f4bf086c3
+chain:    VALID — every entry hash-linked and door-signed
+anchor:   SELF-ANCHORED — door key taken from the ledger file itself; pass --door-key <hex> or --key-directory <path|url> from an independent source to verify authorship
+note:     record the tree head (size:root) after each verify — a later --prev-head check makes rollback and rewrites detectable; witnessing (S6) automates this off-machine.
+spend:
+  mnd_dev_57687de4ae13: settled 0.00025 EUR · open reservations 0.00 EUR · 1 call(s) · 1 refused
+trail:
+  #1  2026-07-21T17:39:48.635Z  INTENT   reserve 0.000477 EUR
+  #2  2026-07-21T17:39:48.651Z  RESULT   settle  0.00025 EUR
+  #3  2026-07-21T17:39:48.737Z  agent.revoke
+  #4  2026-07-21T17:39:48.743Z  DENIED   refused 0.00 EUR  ← reservation REFUSED by policy
+counters: CONSISTENT — 4 counter row(s) equal a fresh replay of the ledger (counters are a projection, never a second truth)
+kills:
+  REVOKED    agent:did:mandare:dev-agent  (index 0, @ 2026-07-21T17:39:48.737Z, entry df0059cd23c5…)
+status:   IETF Token Status List — id=agents bits=1 lst=eNpjBAAAAgAC (S6 publishes this unchanged)
+revocations: CONSISTENT — 1 record(s) equal a fresh replay of the ledger
+
+════════════════════════════════════════════════════════════════════
+ DEMO PASS: stolen token refused (binding + replay), kill halted the
+ running agent on its next call, refusal on the ledger, chain VALID,
+ spend + revocation == replay(ledger). Local authority, no cloud.
+════════════════════════════════════════════════════════════════════
