@@ -15,7 +15,9 @@
     "test": "turbo run test",
     "red-team": "turbo run red-team",
     "smoke": "node scripts/smoke.mjs",
-    "demo": "node scripts/demo-runaway.mjs"
+    "demo": "node scripts/demo-runaway.mjs",
+    "live-smoke": "node scripts/live-smoke.mjs",
+    "provisioning-smoke": "node scripts/provisioning-smoke.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

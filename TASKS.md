@@ -451,9 +451,27 @@ Inherit from S2:
 **From the founder — RESOLVED (2026-07-22):**
 - ✅ **OpenRouter runtime key supplied** and live-verified (4-leg live smoke
   green; runtime rail settles OpenRouter's authoritative `usage.cost`). Key
-  in `.env` only (R2), never committed. STILL PENDING: the OpenRouter
-  **provisioning** key (creates per-agent capped keys) — the provisioning
-  code + mocked tests are done, only live provisioning verification waits.
+  in `.env` only (R2), never committed.
+- ✅ **OpenRouter provisioning (now "Management") key supplied** and the
+  provisioning rail is **live-verified** end-to-end (`pnpm provisioning-smoke`,
+  local-only: create → getKey → disable → rotate → delete, account left
+  clean). Findings folded into `provisioning.ts`:
+  - **RENAME (2026-07-22):** OpenRouter renamed "provisioning keys" →
+    "Management keys" (same function, elevated privileges; a Management key
+    cannot call completion endpoints). The REST surface is UNCHANGED — same
+    base/paths/response shape — verified live. Env var kept as
+    `OPENROUTER_PROVISIONING_KEY` for continuity; noted in code comments.
+  - **Response shape confirmed:** create returns `{ key: "<runtime>", data:
+    { hash, name, label, limit, disabled, … } }` — runtime key is top-level
+    `key`; `data.label` is only a MASKED display label (an early doc summary
+    wrongly called `label` the key). Existing code was already correct.
+  - **Eventual consistency:** OpenRouter's LIST endpoint lags (a just-
+    created/updated key can be missing or show stale `disabled`). Added
+    `getKey` (single read, immediately consistent) and made `disableKey`
+    return the authoritative PATCH-response state; the client and smoke never
+    confirm a mutation by re-listing. This matters for S3's kill switch —
+    the kill-at-OpenRouter confirmation must read the mutation response, not
+    the list.
 - ✅ **Kill-switch UX confirmed:** local CLI against the door = authority
   (offline, fail-closed, un-jammable); S6 witness = additional remote-trigger
   + fleet-propagation channel, never the authority. Full ruling folded into

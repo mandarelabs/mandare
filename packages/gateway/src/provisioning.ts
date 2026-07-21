@@ -1,17 +1,26 @@
 import type { FetchLike } from './providers/types.js';
 
 /**
- * OpenRouter provisioning-key rail (BUILD-DECISIONS Q14): per-agent runtime
- * keys with USD credit caps enforced BY OPENROUTER before any provider is
- * hit — belt-and-suspenders with our own gateway metering. Cap at OpenRouter
- * AND meter in the gateway; either alone failing must not open spend.
+ * OpenRouter provisioning rail (BUILD-DECISIONS Q14): per-agent runtime keys
+ * with USD credit caps enforced BY OPENROUTER before any provider is hit —
+ * belt-and-suspenders with our own gateway metering. Cap at OpenRouter AND
+ * meter in the gateway; either alone failing must not open spend.
+ *
+ * NAMING (2026-07-22): OpenRouter renamed "provisioning keys" to
+ * "Management keys" — same function, elevated privileges, and a Management
+ * key "cannot be used to make API calls" to completion endpoints (admin
+ * only). The REST surface is UNCHANGED by the rename: base
+ * `https://openrouter.ai/api/v1/keys`, `POST` (create, 201), `GET` (list),
+ * `PATCH /{hash}` (update/disable), `DELETE /{hash}`. Create returns
+ * `{ key: "<runtime key>", data: { hash, name, label, limit, disabled, … } }`
+ * — the runtime key is the top-level `key`; `data.label` is only a MASKED
+ * display label. Verified live against the Management API 2026-07-22
+ * (scripts/provisioning-smoke.mjs). We keep the env var name
+ * `OPENROUTER_PROVISIONING_KEY` for continuity.
  *
  * R2: the returned runtime key is secret material. It goes to the vault
  * (S3) and NOWHERE else — never logs, never ledger entries, never errors.
  * This module never stores or prints it.
- *
- * Live use is deferred until the founder creates the OpenRouter account;
- * everything here is exercised by mocked tests only (CI has no secrets).
  */
 
 export interface ProvisionedKey {
@@ -63,6 +72,10 @@ function asKeyRecord(value: unknown): KeyRecord {
   };
 }
 
+function keyStateFromRecord(record: KeyRecord): Omit<ProvisionedKey, 'key'> {
+  return { hash: record.hash, name: record.name, limitUsd: record.limit, disabled: record.disabled };
+}
+
 export class OpenRouterProvisioningClient {
   private readonly baseUrl: string;
   private readonly provisioningKey: string;
@@ -78,7 +91,12 @@ export class OpenRouterProvisioningClient {
     this.fetchImpl = options.fetchImpl ?? (fetch as FetchLike);
   }
 
-  private async call(method: string, path: string, body?: unknown): Promise<unknown> {
+  private async call(
+    method: string,
+    path: string,
+    body?: unknown,
+    allow404 = false
+  ): Promise<unknown> {
     const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
       method,
       headers: {
@@ -88,6 +106,9 @@ export class OpenRouterProvisioningClient {
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       signal: AbortSignal.timeout(30_000),
     });
+    if (response.status === 404 && allow404) {
+      return null;
+    }
     if (!response.ok) {
       throw new OpenRouterProvisioningError(response.status, `${method} ${path}`);
     }
@@ -110,23 +131,40 @@ export class OpenRouterProvisioningClient {
     return { key, hash: data.hash, name: data.name, limitUsd: data.limit, disabled: data.disabled };
   }
 
+  /**
+   * The most recent 100 keys. NOTE: OpenRouter's list is EVENTUALLY
+   * CONSISTENT — a just-created or just-updated key may be missing or show a
+   * stale `disabled` here (verified live 2026-07-22). For authoritative
+   * per-key state, confirm from a mutation's own response or `getKey`, never
+   * by re-listing.
+   */
   async listKeys(): Promise<Omit<ProvisionedKey, 'key'>[]> {
     const payload = (await this.call('GET', '/keys')) as Record<string, unknown>;
     const rows = Array.isArray(payload.data) ? payload.data : [];
-    return rows.map((row) => {
-      const record = asKeyRecord(row);
-      return {
-        hash: record.hash,
-        name: record.name,
-        limitUsd: record.limit,
-        disabled: record.disabled,
-      };
-    });
+    return rows.map((row) => keyStateFromRecord(asKeyRecord(row)));
   }
 
-  /** Gateway-side kill assist: a disabled key stops spending AT OPENROUTER. */
-  async disableKey(hash: string): Promise<void> {
-    await this.call('PATCH', `/keys/${encodeURIComponent(hash)}`, { disabled: true });
+  /** Single-key read — immediately consistent (unlike the list). null on 404. */
+  async getKey(hash: string): Promise<Omit<ProvisionedKey, 'key'> | null> {
+    const payload = await this.call('GET', `/keys/${encodeURIComponent(hash)}`, undefined, true);
+    if (payload === null) {
+      return null;
+    }
+    const record = (payload as Record<string, unknown>).data ?? payload;
+    return keyStateFromRecord(asKeyRecord(record));
+  }
+
+  /**
+   * Gateway-side kill assist: a disabled key stops spending AT OPENROUTER.
+   * Returns the AUTHORITATIVE updated state from the PATCH response (the
+   * list lags; do not re-list to confirm).
+   */
+  async disableKey(hash: string): Promise<Omit<ProvisionedKey, 'key'>> {
+    const payload = await this.call('PATCH', `/keys/${encodeURIComponent(hash)}`, {
+      disabled: true,
+    });
+    const record = (payload as Record<string, unknown>).data ?? payload;
+    return keyStateFromRecord(asKeyRecord(record));
   }
 
   async deleteKey(hash: string): Promise<void> {

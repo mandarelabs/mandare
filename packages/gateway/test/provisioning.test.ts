@@ -94,9 +94,13 @@ describe('OpenRouterProvisioningClient', () => {
     expect(keys[0]).not.toHaveProperty('key');
   });
 
-  test('disable and delete target the key hash', async () => {
+  test('disable returns the authoritative updated state (not a re-list)', async () => {
     const api = mockApi({
-      'PATCH /api/v1/keys/h1': () => new Response('{}', { status: 200 }),
+      'PATCH /api/v1/keys/h1': () =>
+        new Response(
+          JSON.stringify({ data: { hash: 'h1', name: 'a', limit: 10, disabled: true } }),
+          { status: 200 }
+        ),
       'DELETE /api/v1/keys/h1': () => new Response('{}', { status: 200 }),
     });
     const client = new OpenRouterProvisioningClient({
@@ -104,10 +108,34 @@ describe('OpenRouterProvisioningClient', () => {
       baseUrl: 'https://openrouter.example/api/v1',
       fetchImpl: api.fetchImpl,
     });
-    await client.disableKey('h1');
+    const state = await client.disableKey('h1');
+    expect(state).toEqual({ hash: 'h1', name: 'a', limitUsd: 10, disabled: true });
     await client.deleteKey('h1');
     expect(api.calls.map((call) => call.method)).toEqual(['PATCH', 'DELETE']);
     expect(api.calls[0]?.body).toEqual({ disabled: true });
+  });
+
+  test('getKey reads a single key (immediately consistent) and returns null on 404', async () => {
+    const api = mockApi({
+      'GET /api/v1/keys/h1': () =>
+        new Response(
+          JSON.stringify({ data: { hash: 'h1', name: 'a', limit: 5, disabled: true } }),
+          { status: 200 }
+        ),
+      'GET /api/v1/keys/gone': () => new Response('{"error":"not found"}', { status: 404 }),
+    });
+    const client = new OpenRouterProvisioningClient({
+      provisioningKey: 'p',
+      baseUrl: 'https://openrouter.example/api/v1',
+      fetchImpl: api.fetchImpl,
+    });
+    expect(await client.getKey('h1')).toEqual({
+      hash: 'h1',
+      name: 'a',
+      limitUsd: 5,
+      disabled: true,
+    });
+    expect(await client.getKey('gone')).toBeNull();
   });
 
   test('rotation creates the replacement BEFORE deleting the old key', async () => {
