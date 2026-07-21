@@ -5,3 +5,12 @@ packages:
 # Supply-chain posture (BUILD-DECISIONS Q24): dependency cooldown — never install
 # a version published less than 3 days ago (2025 npm-worm lesson).
 minimumReleaseAge: 4320
+
+# Install scripts stay off globally; the ONLY exception is the embedded
+# Postgres test binaries (dev-only, red-team suite), whose postinstall just
+# fixes up dylib symlinks. Pinned exactly in packages/ledger. TASKS.md S1.
+onlyBuiltDependencies:
+  - '@embedded-postgres/darwin-arm64'
+  - '@embedded-postgres/darwin-x64'
+  - '@embedded-postgres/linux-x64'
+  - '@embedded-postgres/linux-arm64'

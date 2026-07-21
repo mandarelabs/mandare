@@ -24,13 +24,17 @@
     "typecheck": "tsc -p tsconfig.test.json --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
-    "red-team": "vitest run test/red-team"
+    "red-team": "vitest run test/red-team",
+    "bench": "node bench/append-bench.mjs"
   },
   "dependencies": {
-    "@mandarelabs/spec": "workspace:*"
+    "@mandarelabs/spec": "workspace:*",
+    "pg": "^8.16.0"
   },
   "devDependencies": {
     "@mandarelabs/verifier": "workspace:*",
+    "@types/pg": "^8.11.0",
+    "embedded-postgres": "17.10.0-beta.17",
     "vitest": "^3.0.0"
   }
 }

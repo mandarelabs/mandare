@@ -16,8 +16,16 @@ import {
 } from '@mandarelabs/spec';
 import { verifyChain } from '@mandarelabs/verifier';
 
-import { readLedger } from '../../src/ledger.js';
-import { buildChainDb } from '../helpers.js';
+import {
+  computeTreeHead,
+  consistencyProof,
+  directoryFromPublicKeys,
+  parseKeyDirectory,
+  verifyConsistency,
+} from '@mandarelabs/verifier';
+
+import { Ledger, readLedger } from '../../src/ledger.js';
+import { buildChainDb, sampleInput } from '../helpers.js';
 
 /**
  * RED-TEAM SUITE (rule R5) — permanent CI tests. Every tamper technique an
@@ -256,7 +264,196 @@ describe('documented boundaries (closed by later sessions)', () => {
     expect(result.ok && result.entries).toBe(2);
   });
 
-  test.todo('S6: verify against witnessed head detects truncation');
-  test.todo('S6: ROLLBACK to an older full copy detected via witness/monotonic counter');
-  test.todo('S1: cross-door entries and key rotation verified via key directory');
+  test.todo('S6: witness service streams heads off-machine and verify fetches them automatically');
+});
+
+/**
+ * S1: the RFC 6962 tree head is the mechanism that turns "truncation is
+ * locally invisible" into a DETECTED attack — provided a head recorded
+ * earlier is available from somewhere the attacker cannot rewrite. Locally
+ * that is a head the operator noted down (`mandare verify --prev-head`);
+ * S6 streams the same heads to the witness service, closing the last gap
+ * (an attacker who also controls the recorded head).
+ */
+describe('rollback & fork detection against a recorded tree head', () => {
+  async function recordHead(dbPath: string) {
+    const { entries } = readLedger(dbPath);
+    return computeTreeHead((entries as { entry_hash: string }[]).map((e) => e.entry_hash));
+  }
+
+  test('TRUNCATION vs recorded head: shrunken ledger is caught by size alone', async () => {
+    const { dbPath } = buildChainDb(4);
+    const recorded = await recordHead(dbPath);
+
+    const db = rawDb(dbPath);
+    dropTriggers(db);
+    db.exec('DELETE FROM ledger_entries WHERE seq > 2;');
+    db.close();
+
+    // Locally still a valid chain (the documented boundary above)…
+    const result = await verify(dbPath);
+    expect(result.ok).toBe(true);
+
+    // …but against the recorded head the attack is visible: the tree shrank.
+    const current = await recordHead(dbPath);
+    expect(current.size).toBeLessThan(recorded.size);
+  });
+
+  test('ROLLBACK + regrow (fork) with the REAL door key: consistency proof fails', async () => {
+    // The strongest rollback: the attacker restores an older copy and lets
+    // the legitimate door keep appending — every signature is genuine, the
+    // chain verifies, sizes match. Only the recorded head exposes the fork.
+    const { dbPath } = buildChainDb(4);
+    const recorded = await recordHead(dbPath);
+
+    // Roll back to 3 entries (≈ restoring yesterday's backup).
+    const db = rawDb(dbPath);
+    dropTriggers(db);
+    db.exec('DELETE FROM ledger_entries WHERE seq = 4;');
+    db.close();
+
+    // The real door appends a DIFFERENT entry 4 — an honest-looking fork.
+    const ledger = Ledger.open(dbPath, { doorId: 'gateway:test' });
+    ledger.append(sampleInput({ action: { type: 'llm.call.intent', target: 'openrouter.ai', request_hash: 'f'.repeat(64) } }));
+    ledger.close();
+
+    // Chain fully valid, same size as recorded…
+    const result = await verify(dbPath);
+    expect(result.ok).toBe(true);
+    const current = await recordHead(dbPath);
+    expect(current.size).toBe(recorded.size);
+
+    // …but the recorded head is NOT a prefix of this history.
+    const { entries } = readLedger(dbPath);
+    const entryHashes = (entries as { entry_hash: string }[]).map((e) => e.entry_hash);
+    const proof = await consistencyProof(entryHashes, recorded.size);
+    expect(
+      await verifyConsistency({
+        size1: recorded.size,
+        root1: recorded.root,
+        size2: current.size,
+        root2: current.root,
+        proof,
+      })
+    ).toBe(false);
+
+    // Control: an honest append-only continuation stays consistent.
+    const honestRecorded = await recordHead(dbPath);
+    const ledger2 = Ledger.open(dbPath, { doorId: 'gateway:test' });
+    ledger2.append(sampleInput());
+    ledger2.close();
+    const { entries: grown } = readLedger(dbPath);
+    const grownHashes = (grown as { entry_hash: string }[]).map((e) => e.entry_hash);
+    const grownHead = await computeTreeHead(grownHashes);
+    const honestProof = await consistencyProof(grownHashes, honestRecorded.size);
+    expect(
+      await verifyConsistency({
+        size1: honestRecorded.size,
+        root1: honestRecorded.root,
+        size2: grownHead.size,
+        root2: grownHead.root,
+        proof: honestProof,
+      })
+    ).toBe(true);
+  });
+});
+
+/**
+ * S1: cross-door chains and key rotation, verified via the OUT-OF-BAND key
+ * directory (SPEC §4 — one JWKS format for door and agent keys). The
+ * directory is what `--door-key` graduates into: authorship comes from keys
+ * the verifier obtained independently, never from the ledger file.
+ */
+describe('multi-door entries & key rotation via key directory', () => {
+  /** Append a tail entry signed by a FOREIGN door key (a second, legitimate door). */
+  function appendForeignDoorEntry(
+    dbPath: string,
+    options: { ts: string; doorId: string }
+  ): { publicKeyHex: string } {
+    const db = rawDb(dbPath);
+    const head = db
+      .prepare('SELECT seq, entry_hash, entry_json FROM ledger_entries ORDER BY seq DESC LIMIT 1')
+      .get() as { seq: number; entry_hash: string; entry_json: string };
+
+    const { privateKey } = generateKeyPairSync('ed25519');
+    const jwk = createPublicKey(privateKey).export({ format: 'jwk' });
+    const publicKey = base64UrlToBytes(jwk.x as string);
+    const template = JSON.parse(head.entry_json) as LedgerEntryV1;
+    const { entry_hash: _hash, door_signature: _sig, ...rest } = template;
+    const preimage: LedgerEntryPreimage = {
+      ...rest,
+      seq: head.seq + 1,
+      ts: options.ts,
+      door_id: options.doorId,
+      prev_hash: head.entry_hash,
+    };
+    const entryHash = computeEntryHash(preimage);
+    const entry: LedgerEntryV1 = {
+      ...preimage,
+      entry_hash: entryHash,
+      door_signature: {
+        alg: 'EdDSA',
+        key_id: sha256Hex(publicKey),
+        key_provenance: 'software',
+        value: bytesToBase64Url(new Uint8Array(cryptoSign(null, hexToBytes(entryHash), privateKey))),
+      },
+    };
+    // Appending is LEGAL — no triggers dropped; multi-door is normal growth.
+    db.prepare(
+      'INSERT INTO ledger_entries (seq, entry_hash, prev_hash, entry_json) VALUES (?, ?, ?, ?)'
+    ).run(entry.seq, entry.entry_hash, entry.prev_hash, JSON.stringify(entry));
+    db.close();
+    return { publicKeyHex: bytesToHex(publicKey) };
+  }
+
+  test('cross-door chain verifies ONLY when every signing key is in the directory', async () => {
+    const { dbPath, publicKeyHex: doorAKey } = buildChainDb(2);
+    const { publicKeyHex: doorBKey } = appendForeignDoorEntry(dbPath, {
+      ts: '2026-07-21T13:00:00.000Z',
+      doorId: 'vault:test',
+    });
+
+    const { entries } = readLedger(dbPath);
+    const fullDirectory = await directoryFromPublicKeys([doorAKey, doorBKey]);
+    const complete = await verifyChain(entries, { keyDirectory: fullDirectory });
+    expect(complete.ok).toBe(true);
+
+    // Directory missing door B (e.g. a rogue process signing with its own
+    // key): the entry is rejected loudly, not trusted.
+    const partialDirectory = await directoryFromPublicKeys([doorAKey]);
+    const partial = await verifyChain(entries, { keyDirectory: partialDirectory });
+    expect(partial.ok).toBe(false);
+    if (!partial.ok) {
+      expect(partial.failure.code).toBe('KEY_UNKNOWN');
+      expect(partial.failure.seq).toBe(3);
+    }
+  });
+
+  test('ROTATION: a rotated-out (stolen) door key cannot vouch for new entries', async () => {
+    const { dbPath, publicKeyHex: doorAKey } = buildChainDb(2); // entries ts = now
+    // Attacker stole door key A AFTER it was rotated out; forges a plausible
+    // tail entry signed by... themselves they cannot (no key A here), but the
+    // equivalent attack is an entry timestamped after A's exp. Rotation cutoff
+    // is set to the past, so ALL of A's entries land outside its window.
+    const rotationCutoff = Math.floor(Date.parse('2020-01-01T00:00:00Z') / 1000);
+    const directory = await parseKeyDirectory({
+      keys: [
+        {
+          kty: 'OKP',
+          crv: 'Ed25519',
+          x: hexKeyToB64Url(doorAKey),
+          exp: rotationCutoff,
+          'mnd:role': 'door',
+        },
+      ],
+    });
+    const { entries } = readLedger(dbPath);
+    const result = await verifyChain(entries, { keyDirectory: directory });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.failure.code).toBe('KEY_EXPIRED');
+  });
+
+  function hexKeyToB64Url(hex: string): string {
+    return bytesToBase64Url(hexToBytes(hex));
+  }
 });
