@@ -1,0 +1,36 @@
+{
+  "name": "@mandarelabs/ledger",
+  "version": "0.1.0",
+  "description": "Mandare append-only ledger: hash-chained, door-signed entries in local SQLite",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.test.json --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "red-team": "vitest run test/red-team"
+  },
+  "dependencies": {
+    "@mandarelabs/spec": "workspace:*"
+  },
+  "devDependencies": {
+    "@mandarelabs/verifier": "workspace:*",
+    "vitest": "^3.0.0"
+  }
+}
