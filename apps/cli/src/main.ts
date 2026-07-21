@@ -15,6 +15,9 @@ Usage:
                                 rollback to an older copy and rewrites
       --prove <seq>             emit an RFC 6962 inclusion proof for one entry
                                 (selective disclosure); full proof in --json
+      --spend                   spend trail (intents, settlements, REFUSED
+                                reservations) + budget-counter invariant check
+                                (counters must equal a fresh ledger replay)
       --json                    machine-readable output
       Without --door-key/--key-directory, verification is self-anchored: it
       proves internal consistency, not authorship.
@@ -133,6 +136,9 @@ async function runVerifyCommand(flags: ParsedArgs['flags']): Promise<number> {
       throw new UsageError('--prove must be a positive integer seq');
     }
     options.proveSeq = seq;
+  }
+  if (flags.has('spend')) {
+    options.spend = true;
   }
 
   const output = await runVerify(db, options);

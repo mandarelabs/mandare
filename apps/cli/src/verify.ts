@@ -1,6 +1,8 @@
 import { readFile } from 'node:fs/promises';
 
 import { readLedger } from '@mandarelabs/ledger';
+
+import { buildSpendReport, type SpendReport } from './spend-report.js';
 import {
   computeTreeHead,
   consistencyProof,
@@ -42,6 +44,7 @@ export interface VerifyCommandOutput {
     tree?: TreeHead;
     consistency?: ConsistencyStatus;
     inclusion_proof?: InclusionProofOutput;
+    spend?: SpendReport['json'];
   };
 }
 
@@ -53,6 +56,8 @@ export interface VerifyOptions {
   prevHead?: TreeHead;
   /** Produce an inclusion proof for this seq (1-based). */
   proveSeq?: number;
+  /** Render the spend trail + budget-counter invariant check (S2). */
+  spend?: boolean;
 }
 
 /**
@@ -195,6 +200,15 @@ export async function runVerify(
     lines.push(
       'note:     record the tree head (size:root) after each verify — a later --prev-head check makes rollback and rewrites detectable; witnessing (S6) automates this off-machine.'
     );
+  }
+
+  if (options.spend === true) {
+    const spendReport = await buildSpendReport(dbPath, entries);
+    lines.push(...spendReport.lines);
+    json.spend = spendReport.json;
+    if (!spendReport.countersConsistent) {
+      exitCode = 1;
+    }
   }
 
   if (options.proveSeq !== undefined) {
