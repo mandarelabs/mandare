@@ -86,6 +86,13 @@ export class PgStore implements LedgerStore {
 
   private constructor(pool: pg.Pool) {
     this.pool = pool;
+    // node-postgres contract: idle-client failures (server restart, network
+    // drop) are emitted on the pool and CRASH the process if unhandled. The
+    // door must survive a database hiccup — the next query checks out a
+    // fresh client and fails loudly in its own call path instead.
+    this.pool.on('error', (error) => {
+      console.error(`mandare pg-store: idle connection dropped (${error.message})`);
+    });
   }
 
   /** Connect as the INSERT-only application role (never as an admin). */

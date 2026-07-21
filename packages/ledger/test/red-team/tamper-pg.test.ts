@@ -100,6 +100,11 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await store.close();
+  // Let client sockets finish tearing down before the server goes away —
+  // on slow runners a fast shutdown mid-teardown sends FATAL 57P01 to
+  // half-closed connections (observed on CI; the pool error handler covers
+  // the production case, this covers the test race).
+  await new Promise((resolve) => setTimeout(resolve, 250));
   await embedded.stop();
 }, 60_000);
 
