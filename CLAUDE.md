@@ -76,8 +76,8 @@ node scripts/check-license-boundaries.mjs
 Required for: any change to `packages/spec` (schema freeze) · payment-rail
 integrations (Stripe webhook flow) · anything reshaping the repo layout.
 
-## Session roadmap (S0 done ⇒ next: S1)
+## Session roadmap (S0+S1 done ⇒ next: S2)
 
-S1 ledger core hardening → S2 gateway+budgets (Demo: runaway loop dies at €20)
+S1 ledger core hardening ✓ → S2 gateway+budgets (Demo: runaway loop dies at €20)
 → S3 vault+kill switch → S4 mandates+approvals → S5 card rail → S6
 witness+anchoring → S7 packaging/MCP/skill → S8 review → S9 launch prep.
