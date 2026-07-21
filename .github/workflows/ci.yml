@@ -48,7 +48,7 @@ jobs:
       - run: pnpm red-team
 
   smoke:
-    name: walking-skeleton smoke (mock provider, no secrets)
+    name: smoke + runaway-cap demo (mock providers, no secrets)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -60,3 +60,6 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: pnpm smoke
+      # The S2 acceptance demo (R7): a runaway loop must die at the €20 cap,
+      # with the refusal on the ledger and counters equal to a fresh replay.
+      - run: pnpm demo

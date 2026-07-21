@@ -91,6 +91,10 @@ importers:
         version: 3.2.7(@types/node@22.20.1)
 
   packages/policy-engine:
+    dependencies:
+      '@mandarelabs/spec':
+        specifier: workspace:*
+        version: link:../spec
     devDependencies:
       vitest:
         specifier: ^3.0.0

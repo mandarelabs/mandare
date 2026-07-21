@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 /**
- * Walking-skeleton smoke test (S0 exit criterion) — runs in CI with no
- * secrets:
+ * Walking-skeleton smoke test — runs in CI with no secrets:
  *
- *   1. start a mock OpenRouter,
- *   2. start the real gateway pointed at it,
- *   3. send one chat completion through the door,
- *   4. `mandare verify` → chain VALID (exit 0),
- *   5. tamper with the DB → `mandare verify` → chain INVALID (exit 1).
+ *   1. generate a signed dev mandate (the S2 gateway refuses to spend
+ *      without one — no more allow-all stub),
+ *   2. start a mock OpenRouter,
+ *   3. start the real gateway pointed at it,
+ *   4. send one chat completion through the door,
+ *   5. `mandare verify --spend` → chain VALID + counters CONSISTENT (exit 0),
+ *   6. tamper with the DB → `mandare verify` → chain INVALID (exit 1).
  */
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -20,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const workDir = mkdtempSync(join(tmpdir(), 'mandare-smoke-'));
 const dbPath = join(workDir, 'ledger.db');
+const mandatePath = join(workDir, 'mandate.json');
 
 let gateway = null;
 let mock = null;
@@ -34,7 +36,12 @@ function fail(message) {
 process.on('uncaughtException', (error) => fail(error.stack ?? String(error)));
 setTimeout(() => fail('timed out after 60s'), 60_000).unref();
 
-// 1. Mock OpenRouter -------------------------------------------------------
+// 1. Dev mandate ------------------------------------------------------------
+execFileSync('node', [join(root, 'scripts/dev-mandate.mjs'), '--out', mandatePath], {
+  stdio: 'inherit',
+});
+
+// 2. Mock OpenRouter ---------------------------------------------------------
 mock = createServer((req, res) => {
   let body = '';
   req.on('data', (chunk) => (body += chunk));
@@ -58,14 +65,17 @@ await new Promise((resolve) => mock.listen(0, '127.0.0.1', resolve));
 const mockPort = mock.address().port;
 console.log(`[smoke] mock provider on 127.0.0.1:${mockPort}`);
 
-// 2. Real gateway ----------------------------------------------------------
+// 3. Real gateway -------------------------------------------------------------
 gateway = spawn('node', [join(root, 'packages/gateway/dist/start.js')], {
   env: {
     ...process.env,
     OPENROUTER_BASE_URL: `http://127.0.0.1:${mockPort}/api/v1`,
     OPENROUTER_API_KEY: 'smoke-test-key-not-a-secret',
+    MANDARE_MANDATE_PATH: mandatePath,
     MANDARE_LEDGER_DB: dbPath,
     MANDARE_GATEWAY_PORT: '0',
+    MANDARE_LEDGER_CURRENCY: 'EUR',
+    MANDARE_USD_PER_LEDGER_UNIT: '1.08',
   },
   stdio: ['ignore', 'pipe', 'inherit'],
 });
@@ -81,7 +91,7 @@ const gatewayUrl = await new Promise((resolve, reject) => {
 });
 console.log(`[smoke] gateway on ${gatewayUrl}`);
 
-// 3. One call through the door --------------------------------------------
+// 4. One call through the door -------------------------------------------------
 const response = await fetch(`${gatewayUrl}/v1/chat/completions`, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
@@ -101,6 +111,7 @@ console.log(`[smoke] intent=${intentEntry.slice(0, 12)}… result=${resultEntry.
 
 const health = await (await fetch(`${gatewayUrl}/healthz`)).json();
 if (health.ok !== true) fail(`healthz not ok: ${JSON.stringify(health)}`);
+if (health.spend_path_open !== true) fail(`spend path not open: ${JSON.stringify(health)}`);
 
 gateway.kill('SIGTERM');
 await new Promise((resolve) => gateway.on('exit', resolve));
@@ -108,12 +119,14 @@ gateway = null;
 mock.close();
 mock = null;
 
-// 4. Verify: chain must be VALID ------------------------------------------
-function runVerify() {
+// 5. Verify: chain VALID + counters CONSISTENT ---------------------------------
+function runVerify(extraArgs = []) {
   return new Promise((resolve) => {
-    const child = spawn('node', [join(root, 'apps/cli/dist/main.js'), 'verify', '--db', dbPath], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    const child = spawn(
+      'node',
+      [join(root, 'apps/cli/dist/main.js'), 'verify', '--db', dbPath, ...extraArgs],
+      { stdio: ['ignore', 'pipe', 'pipe'] }
+    );
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (chunk) => (stdout += chunk));
@@ -122,12 +135,13 @@ function runVerify() {
   });
 }
 
-const clean = await runVerify();
+const clean = await runVerify(['--spend']);
 console.log(clean.stdout.trim().split('\n').map((line) => `[verify] ${line}`).join('\n'));
 if (clean.code !== 0) fail(`verify on untouched ledger exited ${clean.code}: ${clean.stderr}`);
 if (!clean.stdout.includes('VALID')) fail('verify did not report VALID');
+if (!clean.stdout.includes('counters: CONSISTENT')) fail('spend counters not CONSISTENT');
 
-// 5. Tamper → verify must FAIL --------------------------------------------
+// 6. Tamper → verify must FAIL ---------------------------------------------------
 const db = new DatabaseSync(dbPath);
 db.exec('DROP TRIGGER ledger_entries_no_update;');
 db.exec(
@@ -142,4 +156,4 @@ if (tampered.code !== 1) fail(`verify on tampered ledger exited ${tampered.code}
 if (!tampered.stdout.includes('INVALID')) fail('verify did not report INVALID after tamper');
 
 rmSync(workDir, { recursive: true, force: true });
-console.log('\nSMOKE PASS: proxied call → chained entries → verify OK → tamper detected.');
+console.log('\nSMOKE PASS: mandated call → reserve/settle entries → verify + counters OK → tamper detected.');

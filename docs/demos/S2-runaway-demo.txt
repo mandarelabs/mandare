@@ -1,0 +1,58 @@
+════════════════════════════════════════════════════════════════════
+ MANDARE DEMO — a runaway agent loop dies at €20
+════════════════════════════════════════════════════════════════════
+
+[demo] mandate signed: €5/call · €20/day · €100 total — the human signs ONCE.
+[demo] gateway door up at http://127.0.0.1:62491 (ledger: /var/folders/wv/dslzb2wx45qdqzl4dmhhg78m0000gn/T/mandare-demo-MLavfh/ledger.db)
+
+[demo] releasing the runaway loop — it will NOT stop on its own…
+
+  call #  1  200 OK   — ~€0.28 spent so far
+  call #  2  200 OK   — ~€0.56 spent so far
+  call #  3  200 OK   — ~€0.83 spent so far
+  call # 10  200 OK   — ~€2.78 spent so far
+  call # 20  200 OK   — ~€5.56 spent so far
+  call # 30  200 OK   — ~€8.33 spent so far
+  call # 40  200 OK   — ~€11.11 spent so far
+  call # 50  200 OK   — ~€13.89 spent so far
+  call # 60  200 OK   — ~€16.67 spent so far
+  call # 70  200 OK   — ~€19.45 spent so far
+
+  call # 72  403 DENIED — THE LOOP DIES HERE
+    code:   PER_DAY_EXCEEDED
+    reason: per-day budget exceeded: reserved 0.00 EUR + settled 19.723587 EUR + estimate 0.277803 EUR > cap 20.00 EUR
+    the refusal itself is ledger entry ed99a175712ebf38…
+
+[demo] runaway made 71 calls in 0.1s before the mandate killed it.
+
+$ mandare verify --db ledger.db --spend
+ledger:   /var/folders/wv/dslzb2wx45qdqzl4dmhhg78m0000gn/T/mandare-demo-MLavfh/ledger.db
+door:     gateway:local (key f07862623c7e…)
+entries:  143
+head:     ed99a175712ebf3803aeff049645d28521c2cecd52deb700208631a77d8c70ed
+tree:     size=143 root=72563280da4297c2dc2a6933ff783b27ecd40c8702d6c8557851df2a87293e90
+chain:    VALID — every entry hash-linked and door-signed
+anchor:   SELF-ANCHORED — door key taken from the ledger file itself; pass --door-key <hex> or --key-directory <path|url> from an independent source to verify authorship
+note:     record the tree head (size:root) after each verify — a later --prev-head check makes rollback and rewrites detectable; witnessing (S6) automates this off-machine.
+spend:
+  mnd_dev_86f8d6c1356f: settled 19.723587 EUR · open reservations 0.00 EUR · 71 call(s) · 1 refused
+trail:    (last 12 of 143 entries)
+  #132  2026-07-21T15:38:34.698Z  RESULT   settle  0.277797 EUR
+  #133  2026-07-21T15:38:34.698Z  INTENT   reserve 0.277803 EUR
+  #134  2026-07-21T15:38:34.699Z  RESULT   settle  0.277797 EUR
+  #135  2026-07-21T15:38:34.700Z  INTENT   reserve 0.277803 EUR
+  #136  2026-07-21T15:38:34.700Z  RESULT   settle  0.277797 EUR
+  #137  2026-07-21T15:38:34.701Z  INTENT   reserve 0.277803 EUR
+  #138  2026-07-21T15:38:34.702Z  RESULT   settle  0.277797 EUR
+  #139  2026-07-21T15:38:34.702Z  INTENT   reserve 0.277803 EUR
+  #140  2026-07-21T15:38:34.704Z  RESULT   settle  0.277797 EUR
+  #141  2026-07-21T15:38:34.704Z  INTENT   reserve 0.277803 EUR
+  #142  2026-07-21T15:38:34.705Z  RESULT   settle  0.277797 EUR
+  #143  2026-07-21T15:38:34.706Z  DENIED   refused 0.277803 EUR  ← reservation REFUSED by policy
+counters: CONSISTENT — 74 counter row(s) equal a fresh replay of the ledger (counters are a projection, never a second truth)
+
+════════════════════════════════════════════════════════════════════
+ DEMO PASS: 71 calls, €19.723587 settled, call #72 refused,
+ refusal on the ledger, chain VALID, counters == replay(ledger).
+ The human signed once; the mandate did the saying-no.
+════════════════════════════════════════════════════════════════════

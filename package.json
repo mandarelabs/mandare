@@ -14,7 +14,8 @@
     "lint": "turbo run lint && node scripts/check-license-boundaries.mjs && turbo boundaries",
     "test": "turbo run test",
     "red-team": "turbo run red-team",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "demo": "node scripts/demo-runaway.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
