@@ -210,6 +210,12 @@ Fixed same-session:
 - L1 (pg `seq::int` hard stop at 2^31 — fail-closed, accepted), L3
   (directory command leaks no private material — verified), L4 (harmless
   duplication) — no action, recorded here.
+- **(CI-caught, post-review)** `PgStore`'s pool had no `error` listener —
+  per node-postgres semantics any idle-client drop (database restart under
+  a live door) would CRASH the door process. Surfaced as 3 unhandled FATAL
+  57P01s in the CI red-team teardown (mac timing hid it locally). Pool now
+  logs and survives; teardown settles sockets before server stop. A good
+  argument for keeping the red-team suite on a second OS.
 
 ### Known debt (intentional, scheduled)
 
