@@ -1,4 +1,5 @@
 import {
+  SUBJECT_REGISTER,
   diffRevocation,
   readRevocationProjectionSqlite,
   replayRevocation,
@@ -45,9 +46,22 @@ export async function buildRevocationReport(
     };
   }
 
-  const lines: string[] = ['kills:'];
+  // Which entry produced each record's state tells "registered (issuance)"
+  // apart from "reinstated (an authorized un-kill)".
+  const entryTypeByHash = new Map<string, string>();
+  for (const raw of entries) {
+    const entry = raw as { entry_hash?: string; action?: { type?: string } };
+    if (typeof entry?.entry_hash === 'string' && typeof entry?.action?.type === 'string') {
+      entryTypeByHash.set(entry.entry_hash, entry.action.type);
+    }
+  }
+  const lines: string[] = ['subjects:'];
   for (const record of replayed) {
-    const state = record.revoked ? 'REVOKED   ' : 'reinstated';
+    const state = record.revoked
+      ? 'REVOKED   '
+      : entryTypeByHash.get(record.entryHash) === SUBJECT_REGISTER
+        ? 'registered'
+        : 'reinstated';
     lines.push(
       `  ${state} ${record.subject}  (index ${record.statusIndex}, @ ${record.updatedAt}, entry ${record.entryHash.slice(0, 12)}…)`
     );

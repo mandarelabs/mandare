@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { buildDirectory } from './directory.js';
 import { runKill, runReinstate } from './kill.js';
+import { runMandateIssue, runPassportIssue } from './passport-cmd.js';
 import { runTokenIssue } from './token.js';
 import { runVaultImportEnv, runVaultList } from './vault-cmd.js';
 import { parsePrevHead, runVerify, type VerifyOptions } from './verify.js';
@@ -26,13 +27,30 @@ Usage:
       proves internal consistency, not authorship.
 
   mandare kill <agent> [--reason <text>]
+  mandare kill --mandate <id> [--reason <text>]
   mandare kill --all [--reason <text>]
-      Revoke an agent's credentials (or ALL, halting the door) — the LOCAL,
-      offline, fail-closed authority. Writes an agent.revoke entry to the
-      ledger and stops the vault honoring the actor's tokens. The gateway
-      fails closed on its next request. Reads the door from the vault
-      (MANDARE_VAULT_*), the ledger from MANDARE_LEDGER_DB, door from
-      MANDARE_DOOR_ID.
+      Revoke an agent's credentials, ONE mandate (the agent survives, the
+      permission slip dies), or ALL (halting the door) — the LOCAL, offline,
+      fail-closed authority. Writes a revoke entry to the ledger and stops
+      the vault honoring the actor's tokens. The gateway fails closed on its
+      next request. Reads the door from the vault (MANDARE_VAULT_*), the
+      ledger from MANDARE_LEDGER_DB, door from MANDARE_DOOR_ID.
+
+  mandare passport issue --agent-name <label> [--valid-days <n>]
+                         [--out <path>] [--agent-key-out <path>] [--json]
+      Issue an Agent Delegation Credential (SD-JWT VC): owner + local
+      attestation authority keys from the vault (created on first use), mock
+      IDV attestation (no PII), fresh agent did:key, revocation slot
+      registered on the ledger. Writes the credential and the agent's private
+      key (0600, shown once).
+
+  mandare mandate issue --agent <did:key> --out <path> [--purpose <text>]
+                        [--currency EUR] [--per-tx 5] [--per-day 20]
+                        [--per-task 20] [--total 100] [--approval-above <units>]
+                        [--valid-hours 24] [--json]
+      Issue an owner-signed mandate as SD-JWT VC (SPEC §5). Cap flags are
+      WHOLE currency units. The mandate gets its own revocation slot;
+      "mandare kill --mandate <id>" revokes it instantly.
 
   mandare reinstate <agent> [--reason <text>]
       Reverse a kill (authorized un-revocation). New tokens are honored again;
@@ -218,14 +236,76 @@ async function runKillCommand(args: ParsedArgs): Promise<number> {
     throw new UsageError('kill takes at most one <agent> positional argument');
   }
   const agent = args.positionals[0];
-  if (all && agent !== undefined) {
-    throw new UsageError('kill takes EITHER <agent> OR --all, not both');
+  const mandateId = getString(args.flags, 'mandate');
+  const modes = [all, agent !== undefined, mandateId !== undefined].filter(Boolean).length;
+  if (modes > 1) {
+    throw new UsageError('kill takes EXACTLY one of <agent>, --mandate <id>, or --all');
   }
   const reason = getReason(args.flags);
   return runKill(process.env, {
     ...(agent === undefined ? {} : { agent }),
+    ...(mandateId === undefined ? {} : { mandate: mandateId }),
     all,
     ...(reason === undefined ? {} : { reason }),
+  });
+}
+
+function getNumber(flags: ParsedArgs['flags'], name: string): number | undefined {
+  const raw = getString(flags, name);
+  if (raw === undefined) {
+    return undefined;
+  }
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0) {
+    throw new UsageError(`--${name} must be a non-negative number`);
+  }
+  return value;
+}
+
+async function runPassportCommand(args: ParsedArgs): Promise<number> {
+  if (args.positionals[0] !== 'issue') {
+    throw new UsageError("passport subcommand must be 'issue'");
+  }
+  const validDays = getNumber(args.flags, 'valid-days');
+  const agentName = getString(args.flags, 'agent-name');
+  const out = getString(args.flags, 'out');
+  const agentKeyOut = getString(args.flags, 'agent-key-out');
+  return runPassportIssue(process.env, {
+    ...(agentName === undefined ? {} : { agentName }),
+    ...(validDays === undefined ? {} : { validDays }),
+    ...(out === undefined ? {} : { out }),
+    ...(agentKeyOut === undefined ? {} : { agentKeyOut }),
+    json: args.flags.has('json'),
+  });
+}
+
+async function runMandateCommand(args: ParsedArgs): Promise<number> {
+  if (args.positionals[0] !== 'issue') {
+    throw new UsageError("mandate subcommand must be 'issue'");
+  }
+  const flags = args.flags;
+  const agent = getString(flags, 'agent');
+  const out = getString(flags, 'out');
+  const purpose = getString(flags, 'purpose');
+  const currency = getString(flags, 'currency');
+  const perTx = getNumber(flags, 'per-tx');
+  const perDay = getNumber(flags, 'per-day');
+  const perTask = getNumber(flags, 'per-task');
+  const total = getNumber(flags, 'total');
+  const approvalAbove = getNumber(flags, 'approval-above');
+  const validHours = getNumber(flags, 'valid-hours');
+  return runMandateIssue(process.env, {
+    ...(agent === undefined ? {} : { agent }),
+    ...(out === undefined ? {} : { out }),
+    ...(purpose === undefined ? {} : { purpose }),
+    ...(currency === undefined ? {} : { currency }),
+    ...(perTx === undefined ? {} : { perTx }),
+    ...(perDay === undefined ? {} : { perDay }),
+    ...(perTask === undefined ? {} : { perTask }),
+    ...(total === undefined ? {} : { total }),
+    ...(approvalAbove === undefined ? {} : { approvalAbove }),
+    ...(validHours === undefined ? {} : { validHours }),
+    json: args.flags.has('json'),
   });
 }
 
@@ -292,6 +372,12 @@ async function main(): Promise<number> {
   }
   if (command === 'token') {
     return runTokenCommand(args);
+  }
+  if (command === 'passport') {
+    return runPassportCommand(args);
+  }
+  if (command === 'mandate') {
+    return runMandateCommand(args);
   }
   if (command === 'vault') {
     return runVaultCommand(args);

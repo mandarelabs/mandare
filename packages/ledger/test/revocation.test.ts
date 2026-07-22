@@ -10,7 +10,9 @@ import { spendProjector } from '../src/projection.js';
 import {
   AGENT_REINSTATE,
   AGENT_REVOKE,
+  SUBJECT_REGISTER,
   agentSubject,
+  mandateSubject,
   revocationProjector,
 } from '../src/revocation.js';
 import {
@@ -107,6 +109,32 @@ describe('revocation projection', () => {
     const verdict = await verifyRevocationProjection(ledger);
     expect(verdict.ok).toBe(true);
     if (verdict.ok) expect(verdict.subjects).toBe(2);
+  });
+
+  test('subject.register allocates an index at issuance without revoking (S4)', async () => {
+    const subject = mandateSubject('mnd_registered');
+    await ledger.appendProjected(revokeInput(subject, SUBJECT_REGISTER), revocationProjector());
+    expect(await isSubjectRevoked(ledger, subject)).toBe(false);
+    const records = await listRevocations(ledger);
+    expect(records).toHaveLength(1);
+    expect(records[0]?.statusIndex).toBe(0);
+    // A later kill flips the SAME slot — one vocabulary, stable index.
+    await ledger.appendProjected(revokeInput(subject), revocationProjector());
+    expect(await isSubjectRevoked(ledger, subject)).toBe(true);
+    expect((await listRevocations(ledger))[0]?.statusIndex).toBe(0);
+    expect((await verifyRevocationProjection(ledger)).ok).toBe(true);
+  });
+
+  test('re-registering a revoked subject NEVER reinstates it', async () => {
+    const subject = agentSubject('did:mandare:sneaky');
+    await ledger.appendProjected(revokeInput(subject, SUBJECT_REGISTER), revocationProjector());
+    await ledger.appendProjected(revokeInput(subject), revocationProjector());
+    await ledger.appendProjected(revokeInput(subject, SUBJECT_REGISTER), revocationProjector());
+    expect(await isSubjectRevoked(ledger, subject)).toBe(true);
+    // Replay must agree (rebuild determinism with registration in the mix).
+    await rebuildRevocationProjection(ledger);
+    expect(await isSubjectRevoked(ledger, subject)).toBe(true);
+    expect((await verifyRevocationProjection(ledger)).ok).toBe(true);
   });
 
   test('tampering with the revocation table is caught by the replay invariant', async () => {

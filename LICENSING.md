@@ -12,6 +12,7 @@ gateways, frameworks, and verifier tools.
 | `@mandarelabs/spec` | `packages/spec` | The schemas and hashing rules are an open contract; anyone must be able to implement them. |
 | `@mandarelabs/policy-engine` | `packages/policy-engine` | Designed for embedding in third-party gateways and agent frameworks. |
 | `@mandarelabs/verifier` | `packages/verifier` | Anyone must be able to verify a Mandare ledger — including parties who distrust us. |
+| `@mandarelabs/passport` | `packages/passport` | Passports, delegation credentials, and RFC 9421 request signatures must be verifiable by any relying party — including parties who distrust us. |
 
 Planned Apache-2.0 packages (not yet created): `packages/sdk-ts`, `packages/sdk-py`.
 

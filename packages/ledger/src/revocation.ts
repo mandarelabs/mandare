@@ -25,6 +25,14 @@ import type { ProjectionKV, RevocationKV, RevocationRecord } from './store.js';
 export const AGENT_REVOKE = 'agent.revoke';
 /** The authorized reversal of a revoke (un-kill). */
 export const AGENT_REINSTATE = 'agent.reinstate';
+/**
+ * Registers a subject at ISSUANCE time (S4): allocates its status-list index
+ * (so a credential/mandate can carry its `revocation_ref` from day one) and
+ * puts the issuance itself on the record. Registration NEVER changes an
+ * existing subject's state — re-registering a revoked subject is not a
+ * reinstate.
+ */
+export const SUBJECT_REGISTER = 'subject.register';
 
 /** Typed subjects keep agent / door / mandate namespaces from colliding. */
 export function agentSubject(actorDid: string): string {
@@ -45,11 +53,25 @@ export function mandateSubject(mandateId: string): string {
  */
 export async function applyRevocationEntry(kv: ProjectionKV, entry: LedgerEntryV1): Promise<void> {
   const type = entry.action.type;
-  if (type !== AGENT_REVOKE && type !== AGENT_REINSTATE) {
+  if (type !== AGENT_REVOKE && type !== AGENT_REINSTATE && type !== SUBJECT_REGISTER) {
     return;
   }
   const subject = entry.action.target;
   const existing = await kv.getRevocation(subject);
+  if (type === SUBJECT_REGISTER) {
+    if (existing !== null) {
+      // Idempotent and state-preserving: registration can never un-revoke.
+      return;
+    }
+    await kv.putRevocation({
+      subject,
+      revoked: false,
+      statusIndex: await kv.allocateStatusIndex(),
+      updatedAt: entry.ts,
+      entryHash: entry.entry_hash,
+    });
+    return;
+  }
   const statusIndex = existing?.statusIndex ?? (await kv.allocateStatusIndex());
   await kv.putRevocation({
     subject,

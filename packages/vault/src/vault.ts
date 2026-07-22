@@ -113,6 +113,20 @@ export class Vault {
     this.secrets.set(doorAccount(doorId), pem);
   }
 
+  // --- identity keys (S4 passports) ------------------------------------------
+
+  /**
+   * Identity key pairs (owner / local attestation authority) live in the same
+   * encrypted store, as JWK-pair JSON under `identity:*` accounts.
+   */
+  getIdentityKey(account: string): string | null {
+    return this.secrets.get(account);
+  }
+
+  putIdentityKey(account: string, jwkPairJson: string): void {
+    this.secrets.set(account, jwkPairJson);
+  }
+
   // --- scoped tokens --------------------------------------------------------
 
   issueToken(input: IssueTokenInput): ScopedTokenGrant {
@@ -131,6 +145,15 @@ export class Vault {
   /** kill --all: stop honoring every token; the vault is halted. */
   revokeAllTokens(): number {
     return this.tokens.revokeAll();
+  }
+
+  /**
+   * Persistent single-use nonce claim for RFC 9421 request signatures (S4).
+   * Shares the vault's nonce table so a door RESTART cannot reopen a
+   * signature-replay window (an in-memory store would forget claims).
+   */
+  claimSignatureNonce(key: string, expiresAtIso: string): boolean {
+    return this.store.claimNonce(key, expiresAtIso);
   }
 
   prune(): void {

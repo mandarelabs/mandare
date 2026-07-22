@@ -6,8 +6,11 @@ import { AsyncLedger, SqliteStore } from '@mandarelabs/ledger';
 import { MandatePolicyEngine, type PolicyEngine } from '@mandarelabs/policy-engine';
 import type { MandateV1 } from '@mandarelabs/spec';
 
+import type { NonceStore } from '@mandarelabs/passport';
+
 import type { GatewayConfig } from '../src/config.js';
 import { buildGateway, type GatewayDeps } from '../src/server.js';
+import type { ApprovalRequestNotification, Notifier } from '../src/approvals.js';
 import type { GatewayVault } from '../src/auth.js';
 import type { FetchLike } from '../src/providers/types.js';
 
@@ -70,6 +73,14 @@ export function testConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfi
     usdPerLedgerUnit: 1,
     maxIntentsPerMinute: 10_000,
     pricingPath: null,
+    trustedAuthorityDid: null,
+    notifier: 'none',
+    ntfyUrl: 'https://ntfy.example',
+    ntfyTopic: null,
+    notifyFilePath: null,
+    approvalTimeoutMs: 5_000,
+    maxPendingApprovals: 8,
+    publicBaseUrl: null,
     anthropic: { baseUrl: 'https://anthropic.example', apiKey: 'test-key-not-a-secret' },
     openai: { baseUrl: 'https://openai.example/v1', apiKey: 'test-key-not-a-secret' },
     openrouter: { baseUrl: 'https://openrouter.example/api/v1', apiKey: 'test-key-not-a-secret' },
@@ -95,6 +106,8 @@ export async function openTestGateway(options: {
   ledgerOverride?: GatewayDeps['ledger'];
   timeouts?: GatewayDeps['timeouts'];
   vault?: GatewayVault;
+  notifier?: Notifier;
+  nonceStore?: NonceStore;
 } = {}): Promise<TestGateway> {
   const config = testConfig(options.config);
   const store = SqliteStore.open(config.ledgerDbPath);
@@ -115,6 +128,8 @@ export async function openTestGateway(options: {
     policy,
     mandate,
     ...(options.vault === undefined ? {} : { vault: options.vault }),
+    ...(options.notifier === undefined ? {} : { notifier: options.notifier }),
+    ...(options.nonceStore === undefined ? {} : { nonceStore: options.nonceStore }),
     ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
     ...(options.timeouts === undefined ? {} : { timeouts: options.timeouts }),
   });
@@ -129,6 +144,35 @@ export async function openTestGateway(options: {
       await ledger.close();
     },
   };
+}
+
+/** In-memory approval push channel: records notifications, can be told to fail. */
+export class MockNotifier implements Notifier {
+  readonly name = 'mock';
+  readonly notifications: ApprovalRequestNotification[] = [];
+  failNext = false;
+
+  send(notification: ApprovalRequestNotification): Promise<void> {
+    if (this.failNext) {
+      this.failNext = false;
+      return Promise.reject(new Error('push channel down'));
+    }
+    this.notifications.push(notification);
+    return Promise.resolve();
+  }
+
+  /** Wait until a notification lands (the held call sends it asynchronously). */
+  async next(timeoutMs = 2_000): Promise<ApprovalRequestNotification> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const notification = this.notifications.shift();
+      if (notification !== undefined) {
+        return notification;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    throw new Error('no approval notification arrived in time');
+  }
 }
 
 /** OpenRouter-shaped non-stream success with authoritative usage.cost (USD). */

@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 
 import { readLedger } from '@mandarelabs/ledger';
 
+import { buildApprovalReport, type ApprovalReport } from './approval-report.js';
 import { buildSpendReport, type SpendReport } from './spend-report.js';
 import { buildRevocationReport, type RevocationReport } from './revocation-report.js';
 import {
@@ -46,6 +47,7 @@ export interface VerifyCommandOutput {
     consistency?: ConsistencyStatus;
     inclusion_proof?: InclusionProofOutput;
     spend?: SpendReport['json'];
+    approvals?: ApprovalReport['json'];
     revocations?: RevocationReport['json'];
   };
 }
@@ -213,6 +215,14 @@ export async function runVerify(
     if (!spendReport.countersConsistent) {
       exitCode = 1;
     }
+  }
+
+  // Approvals are always surfaced when present — the human decisions are part
+  // of the sequence being proven (Demo 3), never hidden behind a flag.
+  const approvalReport = buildApprovalReport(entries);
+  if (!approvalReport.empty) {
+    lines.push(...approvalReport.lines);
+    json.approvals = approvalReport.json;
   }
 
   // Revocation is always surfaced when a ledger has kills — a killed agent is

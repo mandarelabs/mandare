@@ -21,22 +21,35 @@ actually did.
   on the ledger. No ledger write → no call. Budget overshoot by concurrent
   calls is impossible by construction (reservations serialize under the
   append lock — red-team proven).
+- **Passport** (`packages/passport`, Apache-2.0) — verified agent identity.
+  `did:key` (Ed25519) for owner and agent; an owner-signed Agent Delegation
+  Credential (SD-JWT VC) countersigned by an attestation authority after
+  (mock) KYC — the attestation carries only `{kyc_level, partner_id, date,
+  ref_hash}`, never PII. Mandates travel as owner-signed SD-JWT VCs. Agents
+  authenticate every request with RFC 9421 HTTP Message Signatures
+  (web-bot-auth profile) over method/path/authority and a Content-Digest of
+  the body, under the passport's non-exportable key. Everything verifies
+  offline; embeddable by parties who distrust us.
 - **Policy engine** (`packages/policy-engine`, Apache-2.0) — mandate
   evaluation in SPEC order: identity → validity window → scope → budgets
   (per-tx / per-day / per-task / total + velocity) → counterparty →
   approval threshold. Cedar-shaped interface; checks that cannot run yet
-  fail *closed*.
+  fail *closed*. Above-threshold calls trigger an async human approval
+  (CIBA-style): the gateway holds the call, pushes an Approve/Deny
+  notification (ntfy), and the decision lands as a ledger entry that
+  unblocks or refuses the held request.
 - **Vault** (`packages/vault`) — the credential door. Third-party keys and the
   door signing key live in the OS keychain (`@napi-rs/keyring`), encrypted at
   rest; agents never see a raw secret. It mints short-lived (≤30-min)
   proof-of-possession scoped tokens: a leaked token id without its secret is
   dead paper, replays are refused, and a kill makes it dead instantly.
-- **Kill switch** (`mandare kill <agent>`) — the LOCAL, offline, un-jammable
-  authority. It writes an `agent.revoke` entry to the ledger and flips a
-  revocation projection in the same transaction; the gateway fails closed on
-  its very next request, with no network round-trip. The revocation is an IETF
-  Token Status List bitstring — the same vocabulary a witness service later
-  publishes for external verifiers.
+- **Kill switch** (`mandare kill <agent>` / `--mandate <id>` / `--all`) — the
+  LOCAL, offline, un-jammable authority. It writes an `agent.revoke` entry to
+  the ledger and flips a revocation projection in the same transaction; the
+  gateway fails closed on its very next request, with no network round-trip.
+  Agents, doors, and mandates share ONE revocation vocabulary — the IETF Token
+  Status List bitstring a witness service later publishes for external
+  verifiers.
 - **Ledger** (`packages/ledger`) — append-only SQLite/Postgres store, every
   entry hash-chained and Ed25519-signed. Budget counters AND revocation state
   are derived projections of the ledger, rebuildable from it and continuously
@@ -47,9 +60,11 @@ actually did.
   schemas. An open contract.
 - **CLI** (`apps/cli`) — `mandare verify --db <path>` (RFC 6962 tree heads,
   `--key-directory`, `--prev-head` rollback detection, `--prove` inclusion
-  proofs, `--spend` trail + counter invariant, plus the revocation trail +
-  status list), `mandare kill`/`reinstate`/`token`/`vault`, and `mandare
-  directory` (publish door keys as an RFC 9421-style JWKS — `docs/KEY-DIRECTORY.md`).
+  proofs, `--spend` trail + counter invariant, plus the approval trail, the
+  revocation trail, and the status list), `mandare passport issue` and
+  `mandare mandate issue` (SD-JWT VC issuance), `mandare
+  kill`/`reinstate`/`token`/`vault`, and `mandare directory` (publish door
+  keys as an RFC 9421-style JWKS — `docs/KEY-DIRECTORY.md`).
 
 ## The demo: a runaway loop dies at €20
 
@@ -76,6 +91,22 @@ id is refused (no secret → no proof); a captured request can't be replayed
 next call fail closed — the refusal lands on the ledger, and `mandare verify`
 proves chain + spend + revocation all equal a fresh replay. Local authority, no
 cloud. Captured run: `docs/demos/S3-dead-paper-demo.txt`.
+
+## The demo: one signed mandate replaces 40 permission prompts
+
+```bash
+pnpm demo:mandate
+```
+
+A passport-carrying agent (authority → KYC'd owner → agent, all
+offline-verifiable) runs a multi-step task under ONE owner-signed mandate.
+Every in-scope call proceeds with zero human interaction. One over-threshold
+call pauses: the gateway holds it, pushes an Approve/Deny notification, the
+human approves, and the task continues. A second over-threshold call is
+DENIED — and the refusal is a ledger entry, not a vanished dialog box. Every
+request is authenticated with an RFC 9421 signature over its exact body.
+`mandare verify` proves the whole sequence, human decisions included. Captured
+run: `docs/demos/S4-mandate-demo.txt`.
 
 ## Quickstart (your own keys)
 

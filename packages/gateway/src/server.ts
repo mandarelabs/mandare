@@ -12,9 +12,14 @@ import {
   type MandateV1,
 } from '@mandarelabs/spec';
 import {
+  APPROVAL_DENIED,
+  APPROVAL_EXPIRED,
+  APPROVAL_GRANTED,
+  APPROVAL_REQUESTED,
   LLM_CALL_DENIED,
   agentSubject,
   doorSubject,
+  mandateSubject,
   readSpendSnapshot,
   spendProjector,
   type AppendInput,
@@ -24,6 +29,7 @@ import {
   type RevocationRecord,
   type SpendGuardView,
 } from '@mandarelabs/ledger';
+import { InMemoryNonceStore, isDidKey, type NonceStore } from '@mandarelabs/passport';
 import {
   checkBudgets,
   selectGatewaySpendScope,
@@ -33,12 +39,14 @@ import {
 import type { SpendScope } from '@mandarelabs/spec';
 
 import type { GatewayConfig, ProviderEndpoint } from './config.js';
+import { ApprovalService, type Notifier } from './approvals.js';
 import {
   buildAllowedHosts,
   extractRequestClaims,
   isHostAllowed,
   type GatewayVault,
 } from './auth.js';
+import { authenticatePassportRequest } from './passport-auth.js';
 import {
   estimateUsdMicros,
   findPricing,
@@ -70,6 +78,17 @@ export interface GatewayDeps {
    * absent, auth falls back to authMode (S2 localhost-only for 'none'/'auto').
    */
   vault?: GatewayVault;
+  /**
+   * Approval push channel (S4). Absent ⇒ above-threshold calls are DENIED
+   * outright (the S2 fail-closed behavior) — no channel, no hold.
+   */
+  notifier?: Notifier;
+  /**
+   * Single-use nonce claims for RFC 9421 signatures (passport mode). Wire the
+   * vault-backed store in production so door restarts cannot reopen a replay
+   * window; defaults to in-memory (tests, dev).
+   */
+  nonceStore?: NonceStore;
   pricingTable?: readonly ModelPricing[];
   fetchImpl?: FetchLike;
   /** Test hook: production values are the module constants. */
@@ -136,7 +155,7 @@ interface CallPlan {
 }
 
 export function buildGateway(deps: GatewayDeps): FastifyInstance {
-  const { config, ledger, policy, mandate, vault } = deps;
+  const { config, ledger, policy, mandate, vault, notifier } = deps;
   const pricingTable = deps.pricingTable ?? DEFAULT_PRICING;
   const fetchImpl = deps.fetchImpl ?? (fetch as FetchLike);
   const timeouts = deps.timeouts ?? {
@@ -149,14 +168,36 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
 
   // "If you have a vault, the door authenticates." authMode='token' forces it
   // even without a vault (⇒ every spend request fails closed until one is
-  // wired); 'none' is the S2 localhost-only behavior.
+  // wired); 'none' is the S2 localhost-only behavior; 'passport' (S4)
+  // replaces the HMAC token with the passport chain + RFC 9421 signature.
+  const passportMode = config.authMode === 'passport';
   const requireToken =
     config.authMode === 'token' || (config.authMode === 'auto' && vault !== undefined);
   const allowedHosts = buildAllowedHosts(config);
+  const nonceStore = deps.nonceStore ?? new InMemoryNonceStore();
+  const approvals = new ApprovalService(config.approvalTimeoutMs);
+  const rawBodies = new WeakMap<object, Buffer>();
 
   // coerceTypes OFF: this is a policy boundary — `stream: "true"` must be a
   // 400, not a silent boolean (R4; caught by the hostile-input red-team).
   const app = Fastify({ logger: false, ajv: { customOptions: { coerceTypes: false } } });
+
+  if (passportMode) {
+    // RFC 9421 Content-Digest must be checked against the EXACT bytes the
+    // client signed, so passport mode parses JSON itself and keeps the raw
+    // buffer alongside (schema validation still applies to the parsed body).
+    app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (request, body, done) => {
+      const bytes = body as Buffer;
+      rawBodies.set(request, bytes);
+      try {
+        done(null, JSON.parse(bytes.toString('utf8')));
+      } catch {
+        const parseError = new Error('body is not valid JSON') as Error & { statusCode: number };
+        parseError.statusCode = 400;
+        done(parseError, undefined);
+      }
+    });
+  }
 
   // DNS-rebinding defense: reject any request whose Host header is not a
   // known-local name before it can reach a route (S2 review hardening).
@@ -200,6 +241,31 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
       openrouter: config.openrouter.apiKey !== null,
     },
   }));
+
+  // Human decision endpoint — the target of the push's Approve/Deny action
+  // buttons. Auth here is the single-use capability token from the push
+  // itself (constant-time compared, hash-stored, bound to one approval, dead
+  // after first use); agent tokens/passports play no role — the HUMAN decides.
+  app.post(
+    '/approvals/:id',
+    {
+      schema: {
+        params: Type.Object({ id: Type.String({ minLength: 1 }) }, { additionalProperties: false }),
+        body: Type.Object({ token: Type.String({ minLength: 1 }) }, { additionalProperties: false }),
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const { token } = request.body as { token: string };
+      const result = approvals.decide(id, token);
+      if (!result.ok) {
+        const status =
+          result.refusal === 'UNKNOWN_APPROVAL' ? 404 : result.refusal === 'ALREADY_DECIDED' ? 409 : 403;
+        return reply.code(status).send({ error: 'approval decision rejected', code: result.refusal });
+      }
+      return reply.send({ ok: true, decision: result.outcome });
+    }
+  );
 
   app.post(
     '/v1/chat/completions',
@@ -274,75 +340,147 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
     const pricing = findPricing(model, pricingTable);
     const providerHost = new URL(endpoint.baseUrl).host;
 
-    // Kill switch (S3): a revoked agent — or a killed door (kill --all) —
-    // fails closed on its very next call, ahead of any spend work. This is
-    // the LOCAL, offline, un-jammable authority: the gateway reads the ledger
-    // revocation projection directly, never the cloud. Fail closed if it
-    // cannot be read. The refusal is recorded so `mandare verify` shows it.
-    let revoked: { agent: RevocationRecord | null; door: RevocationRecord | null };
-    try {
-      revoked = await ledger.runProjection(async (tx) => ({
-        agent: await tx.getRevocation(agentSubject(config.actor)),
-        door: await tx.getRevocation(doorSubject(config.doorId)),
-      }));
-    } catch {
-      return reply
-        .code(503)
-        .send({ error: 'revocation status unavailable — refusing to act (fail-closed)' });
-    }
-    if (revoked.agent?.revoked === true || revoked.door?.revoked === true) {
-      const killedDoor = revoked.door?.revoked === true;
-      const code = killedDoor ? 'DOOR_REVOKED' : 'AGENT_REVOKED';
-      const reasons = [
-        killedDoor
-          ? `door '${config.doorId}' has been killed (kill --all) — every credential is revoked (fail-closed)`
-          : `agent '${config.actor}' has been killed — its credentials are revoked (fail-closed)`,
-      ];
-      // Coalesce: record the refusal for evidence, but don't let a post-kill
-      // loop amplify into an unbounded stream of fsync'd DENIED entries.
-      const nowMs = Date.now();
-      if (nowMs - lastRevokedDeniedAt < REVOKED_DENIED_THROTTLE_MS) {
-        return reply.code(403).send({ error: 'denied by policy', code, reasons });
+    // Identity + kill switch. Two mode-dependent shapes with one outcome: a
+    // verified (or asserted) `actor`, checked against the LOCAL revocation
+    // projection — never the cloud — before any spend work (S3 authority).
+    //
+    // - Legacy/token modes (S2/S3, frozen demos): the kill check runs BEFORE
+    //   token auth so a killed agent's refusal lands on the ledger even when
+    //   the vault has also revoked its token; the actor is the configured one
+    //   (a valid token proves an authorized HOLDER, not WHO).
+    // - Passport mode (S4): the door check still runs pre-auth (self-
+    //   knowledge, no attribution problem), then the passport chain + RFC
+    //   9421 signature PROVE the actor, and only then are the agent and
+    //   MANDATE subjects checked — so the kill-refusal is attributed to a
+    //   cryptographically verified identity, not to whatever a rando claims.
+    //   (Kill does not invalidate the agent's key, so a killed agent still
+    //   authenticates — and its refusal is recorded, same as S3.)
+    let actor = config.actor;
+    if (passportMode) {
+      const doorRevoked = await readRevocation(doorSubject(config.doorId));
+      if (doorRevoked === 'unavailable') {
+        return replyRevocationUnavailable(reply);
       }
-      lastRevokedDeniedAt = nowMs;
-      return await recordDenied(reply, {
-        requestHash,
-        target: providerHost,
-        estimateLedgerMicros: 0,
-        code,
-        reasons,
-      });
-    }
-
-    // Door-local authentication (S3): AFTER the kill check (the kill switch is
-    // the highest-priority gate, and its refusal must land on the ledger even
-    // when the vault has also revoked the token). The caller must present a
-    // valid vault proof-of-possession token scoped to THIS door's actor and
-    // mandate — a leaked token id without its secret is dead paper. Auth
-    // failures are pre-authorization rejections (401/403), not policy denials,
-    // so they do not enter the ledger (no known actor to attribute them to).
-    if (requireToken) {
-      if (vault === undefined) {
+      if (doorRevoked?.revoked === true) {
+        return await refuseRevoked(reply, {
+          requestHash,
+          target: providerHost,
+          code: 'DOOR_REVOKED',
+          reason: `door '${config.doorId}' has been killed (kill --all) — every credential is revoked (fail-closed)`,
+          actor,
+        });
+      }
+      if (config.trustedAuthorityDid === null) {
         return reply.code(503).send({
-          error: 'token auth required but no vault is configured — spend path closed (fail-closed)',
+          error:
+            'passport auth requires MANDARE_TRUST_AUTHORITY (attestation authority DID) — spend path closed (fail-closed)',
         });
       }
-      const claims = extractRequestClaims(request);
-      if (claims === null) {
-        return reply.code(401).send({
-          error: 'missing proof-of-possession token headers (x-mandare-token/timestamp/nonce/pop)',
-        });
+      const rawBody = rawBodies.get(request);
+      if (rawBody === undefined) {
+        return reply.code(401).send({ error: 'request body bytes unavailable for signature check' });
       }
-      const verdict = vault.verifyRequest(claims);
-      if (!verdict.ok) {
+      const auth = await authenticatePassportRequest({
+        request,
+        rawBody,
+        trustedAuthorityDid: config.trustedAuthorityDid,
+        nonceStore,
+      });
+      if (!auth.ok) {
         return reply
-          .code(401)
-          .send({ error: 'token rejected', code: verdict.refusal.code, reason: verdict.refusal.reason });
+          .code(auth.refusal.status)
+          .send({ error: 'passport rejected', code: auth.refusal.code, reason: auth.refusal.reason });
       }
-      if (verdict.verified.actor !== config.actor || verdict.verified.mandateId !== mandate.id) {
+      // Bind the verified delegation chain to THIS mandate (MEDIUM-1): the
+      // credential's owner must be the mandate principal, and if the
+      // credential names a mandate it must be this one. Otherwise the chain
+      // the door records for the spend ("verified owner → agent") would not
+      // be the chain the mandate names — an accountability laundering gap.
+      if (isDidKey(mandate.principal) && auth.passport.ownerDid !== mandate.principal) {
         return reply.code(403).send({
-          error: 'token is scoped to a different actor/mandate than this door',
+          error: 'passport rejected',
+          code: 'OWNER_MISMATCH',
+          reason: "the delegation credential's owner is not this mandate's principal",
         });
+      }
+      if (auth.passport.mandateRef !== null && auth.passport.mandateRef !== mandate.id) {
+        return reply.code(403).send({
+          error: 'passport rejected',
+          code: 'MANDATE_MISMATCH',
+          reason: 'the delegation credential is bound to a different mandate than this door enforces',
+        });
+      }
+      actor = auth.passport.agentDid;
+      const agentRevoked = await readRevocation(agentSubject(actor));
+      const mandateRevoked = await readRevocation(mandateSubject(mandate.id));
+      if (agentRevoked === 'unavailable' || mandateRevoked === 'unavailable') {
+        return replyRevocationUnavailable(reply);
+      }
+      if (agentRevoked?.revoked === true || mandateRevoked?.revoked === true) {
+        const mandateKilled = mandateRevoked?.revoked === true && agentRevoked?.revoked !== true;
+        return await refuseRevoked(reply, {
+          requestHash,
+          target: providerHost,
+          code: mandateKilled ? 'MANDATE_REVOKED' : 'AGENT_REVOKED',
+          reason: mandateKilled
+            ? `mandate '${mandate.id}' has been revoked — the permission slip is dead paper (fail-closed)`
+            : `agent '${actor}' has been killed — its credentials are revoked (fail-closed)`,
+          actor,
+        });
+      }
+    } else {
+      const revoked = await readRevocations();
+      if (revoked === 'unavailable') {
+        return replyRevocationUnavailable(reply);
+      }
+      if (
+        revoked.agent?.revoked === true ||
+        revoked.door?.revoked === true ||
+        revoked.mandate?.revoked === true
+      ) {
+        const killedDoor = revoked.door?.revoked === true;
+        const killedMandate = revoked.mandate?.revoked === true && revoked.agent?.revoked !== true;
+        const code = killedDoor ? 'DOOR_REVOKED' : killedMandate ? 'MANDATE_REVOKED' : 'AGENT_REVOKED';
+        const reason = killedDoor
+          ? `door '${config.doorId}' has been killed (kill --all) — every credential is revoked (fail-closed)`
+          : killedMandate
+            ? `mandate '${mandate.id}' has been revoked — the permission slip is dead paper (fail-closed)`
+            : `agent '${config.actor}' has been killed — its credentials are revoked (fail-closed)`;
+        return await refuseRevoked(reply, {
+          requestHash,
+          target: providerHost,
+          code,
+          reason,
+          actor,
+        });
+      }
+
+      // Door-local token authentication (S3). Auth failures are pre-
+      // authorization rejections (401/403), not policy denials, so they do
+      // not enter the ledger (no verified actor to attribute them to).
+      if (requireToken) {
+        if (vault === undefined) {
+          return reply.code(503).send({
+            error: 'token auth required but no vault is configured — spend path closed (fail-closed)',
+          });
+        }
+        const claims = extractRequestClaims(request);
+        if (claims === null) {
+          return reply.code(401).send({
+            error: 'missing proof-of-possession token headers (x-mandare-token/timestamp/nonce/pop)',
+          });
+        }
+        const verdict = vault.verifyRequest(claims);
+        if (!verdict.ok) {
+          return reply
+            .code(401)
+            .send({ error: 'token rejected', code: verdict.refusal.code, reason: verdict.refusal.reason });
+        }
+        if (verdict.verified.actor !== config.actor || verdict.verified.mandateId !== mandate.id) {
+          return reply.code(403).send({
+            error: 'token is scoped to a different actor/mandate than this door',
+          });
+        }
       }
     }
 
@@ -350,6 +488,7 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
       // No price → no metering → no spend (R1). OpenRouter is exempt: its
       // response cost is authoritative, so we reserve the full per-tx cap.
       return await recordDenied(reply, {
+        actor,
         requestHash,
         target: providerHost,
         estimateLedgerMicros: 0,
@@ -383,22 +522,14 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
     // Advisory for budgets (the reservation re-checks under the lock), and
     // authoritative for everything else (identity, window, scope,
     // counterparty, approvals). A throwing engine = deny (R1).
-    let snapshot;
-    try {
-      snapshot = await readSpendSnapshot(ledger, {
+    const evaluatePolicy = async (approvedEntryHash?: string) => {
+      const snapshot = await readSpendSnapshot(ledger, {
         mandateId: mandate.id,
-        actor: config.actor,
+        actor,
         nowIso: new Date().toISOString(),
       });
-    } catch {
-      return reply
-        .code(503)
-        .send({ error: 'spend counters unavailable — refusing to act (fail-closed)' });
-    }
-    let decision;
-    try {
-      decision = await policy.evaluate({
-        principal: config.actor,
+      return policy.evaluate({
+        principal: actor,
         action: 'llm.call',
         resource: model,
         context: {
@@ -411,7 +542,7 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
               reservedMicros: snapshot.day.reservedMicros,
               settledMicros: snapshot.day.settledMicros,
             },
-            // One mandate = one task until task attribution lands (S4).
+            // One mandate = one task until task attribution lands (S5+).
             task: {
               reservedMicros: snapshot.total.reservedMicros,
               settledMicros: snapshot.total.settledMicros,
@@ -421,13 +552,80 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
               settledMicros: snapshot.total.settledMicros,
             },
           },
+          ...(approvedEntryHash === undefined ? {} : { approvedEntryHash }),
         },
       });
+    };
+
+    let decision;
+    try {
+      decision = await evaluatePolicy();
     } catch {
-      return reply.code(503).send({ error: 'policy engine unavailable (fail-closed)' });
+      return reply.code(503).send({ error: 'policy denied or unavailable (fail-closed)' });
+    }
+    if (decision.decision !== 'allow' && decision.code === 'APPROVAL_REQUIRED') {
+      // The S4 unlock: instead of a flat refusal, HOLD the call and push the
+      // decision to the human (SPEC §5, CIBA-style). No notifier configured ⇒
+      // the S2 fail-closed denial stands.
+      if (notifier === undefined) {
+        return await recordDenied(reply, {
+          actor,
+          requestHash,
+          target: providerHost,
+          estimateLedgerMicros: plan.estimateLedgerMicros,
+          code: 'APPROVAL_REQUIRED',
+          reasons: [...decision.reasons, 'no approval push channel configured — refusing (fail-closed)'],
+        });
+      }
+      // Held calls reserve nothing, so they escape the velocity counter — cap
+      // concurrent holds so a looping agent can't flood the human with pushes
+      // (notification fatigue is a phishing vector), pin sockets, or amplify
+      // fsync'd approval.requested entries (MEDIUM-2).
+      if (approvals.pendingCount() >= config.maxPendingApprovals) {
+        return await recordDenied(reply, {
+          actor,
+          requestHash,
+          target: providerHost,
+          estimateLedgerMicros: plan.estimateLedgerMicros,
+          code: 'APPROVAL_BACKLOG',
+          reasons: [
+            `too many approvals already awaiting a human decision (≥${config.maxPendingApprovals}) — refusing (fail-closed)`,
+          ],
+        });
+      }
+      const outcome = await holdForApproval(reply, plan, { actor, providerHost });
+      if (outcome.kind !== 'approved') {
+        return outcome.reply;
+      }
+      // A kill (agent / mandate / door) may have landed WHILE the call was
+      // held. Re-check revocation before resuming — an approved-but-since-
+      // revoked call must still fail closed (HIGH-2: the hold window can be
+      // long, and "revoked instantly" must mean instantly).
+      const heldRevocation = await revocationRefusal(actor);
+      if (heldRevocation === 'unavailable') {
+        return replyRevocationUnavailable(reply);
+      }
+      if (heldRevocation !== null) {
+        return await refuseRevoked(reply, {
+          actor,
+          requestHash,
+          target: providerHost,
+          code: heldRevocation.code,
+          reason: heldRevocation.reason,
+        });
+      }
+      // Re-evaluate the FULL policy order with the recorded grant: time
+      // passed while the call was held (window, budgets, velocity may have
+      // moved); only the satisfied approval threshold is waived.
+      try {
+        decision = await evaluatePolicy(outcome.grantedEntryHash);
+      } catch {
+        return reply.code(503).send({ error: 'policy denied or unavailable (fail-closed)' });
+      }
     }
     if (decision.decision !== 'allow') {
       return await recordDenied(reply, {
+        actor,
         requestHash,
         target: providerHost,
         estimateLedgerMicros: plan.estimateLedgerMicros,
@@ -464,7 +662,7 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
     try {
       reservation = await ledger.appendProjected(
         {
-          actor: config.actor,
+          actor,
           mandate_id: mandate.id,
           action: { type: LLM_CALL_INTENT, target: providerHost, request_hash: requestHash },
           cost: {
@@ -484,6 +682,7 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
     }
     if (reservation.kind === 'refused') {
       return await recordDenied(reply, {
+        actor,
         requestHash,
         target: providerHost,
         estimateLedgerMicros: plan.estimateLedgerMicros,
@@ -711,10 +910,253 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
     return plan.estimateLedgerMicros;
   }
 
+  /** One revocation record, or 'unavailable' when the projection cannot be read. */
+  async function readRevocation(subject: string): Promise<RevocationRecord | null | 'unavailable'> {
+    try {
+      return await ledger.runProjection((tx) => tx.getRevocation(subject));
+    } catch {
+      return 'unavailable';
+    }
+  }
+
+  /** Legacy modes read agent + door + mandate in one projection pass. */
+  async function readRevocations(): Promise<
+    | { agent: RevocationRecord | null; door: RevocationRecord | null; mandate: RevocationRecord | null }
+    | 'unavailable'
+  > {
+    try {
+      return await ledger.runProjection(async (tx) => ({
+        agent: await tx.getRevocation(agentSubject(config.actor)),
+        door: await tx.getRevocation(doorSubject(config.doorId)),
+        mandate: mandate === null ? null : await tx.getRevocation(mandateSubject(mandate.id)),
+      }));
+    } catch {
+      return 'unavailable';
+    }
+  }
+
+  function replyRevocationUnavailable(reply: FastifyReply): unknown {
+    return reply
+      .code(503)
+      .send({ error: 'revocation status unavailable — refusing to act (fail-closed)' });
+  }
+
+  /**
+   * Evaluate door + agent + mandate revocation for one actor. Returns a
+   * refusal descriptor if any subject is killed, 'unavailable' if the
+   * projection can't be read (fail closed), or null if all clear. Used both
+   * at request entry AND again when a HELD call resumes — a kill that lands
+   * during the approval hold must still close the door (HIGH-2).
+   */
+  async function revocationRefusal(
+    actorDid: string
+  ): Promise<{ code: string; reason: string } | 'unavailable' | null> {
+    const door = await readRevocation(doorSubject(config.doorId));
+    const agent = await readRevocation(agentSubject(actorDid));
+    const mandateRec = mandate === null ? null : await readRevocation(mandateSubject(mandate.id));
+    if (door === 'unavailable' || agent === 'unavailable' || mandateRec === 'unavailable') {
+      return 'unavailable';
+    }
+    if (door?.revoked === true) {
+      return {
+        code: 'DOOR_REVOKED',
+        reason: `door '${config.doorId}' has been killed (kill --all) — every credential is revoked (fail-closed)`,
+      };
+    }
+    if (agent?.revoked === true) {
+      return {
+        code: 'AGENT_REVOKED',
+        reason: `agent '${actorDid}' has been killed — its credentials are revoked (fail-closed)`,
+      };
+    }
+    if (mandateRec?.revoked === true) {
+      return {
+        code: 'MANDATE_REVOKED',
+        reason: `mandate '${mandate?.id}' has been revoked — the permission slip is dead paper (fail-closed)`,
+      };
+    }
+    return null;
+  }
+
+  /**
+   * Refuse a revoked subject, recording the refusal — but coalesced so a
+   * post-kill loop cannot amplify into an unbounded stream of fsync'd DENIED
+   * entries (at most one recorded kill-refusal per throttle window).
+   */
+  async function refuseRevoked(
+    reply: FastifyReply,
+    args: { requestHash: string; target: string; code: string; reason: string; actor: string }
+  ): Promise<unknown> {
+    const nowMs = Date.now();
+    if (nowMs - lastRevokedDeniedAt < REVOKED_DENIED_THROTTLE_MS) {
+      return reply.code(403).send({ error: 'denied by policy', code: args.code, reasons: [args.reason] });
+    }
+    lastRevokedDeniedAt = nowMs;
+    return await recordDenied(reply, {
+      actor: args.actor,
+      requestHash: args.requestHash,
+      target: args.target,
+      estimateLedgerMicros: 0,
+      code: args.code,
+      reasons: [args.reason],
+    });
+  }
+
+  /**
+   * The held-call approval flow (SPEC §5): approval.requested entry (log-
+   * before-act) → push with Approve/Deny capability buttons → wait → the
+   * decision entry lands BEFORE the call resumes or is refused. Every exit
+   * is fail-closed: no channel, failed push, failed entry, timeout — deny.
+   */
+  async function holdForApproval(
+    reply: FastifyReply,
+    plan: CallPlan,
+    ctx: { actor: string; providerHost: string }
+  ): Promise<{ kind: 'approved'; grantedEntryHash: string } | { kind: 'refused'; reply: unknown }> {
+    const activeMandate = mandate as MandateV1;
+    const thresholds = activeMandate.approvals.rules
+      .filter((rule) => plan.estimateLedgerMicros > rule.above)
+      .map((rule) => rule.above);
+    const thresholdMicros = thresholds.length === 0 ? 0 : Math.min(...thresholds);
+
+    let requested: LedgerEntryV1;
+    try {
+      const appended = await ledger.appendProjected(
+        {
+          actor: ctx.actor,
+          mandate_id: activeMandate.id,
+          action: {
+            type: APPROVAL_REQUESTED,
+            target: ctx.providerHost,
+            request_hash: plan.requestHash,
+          },
+          // The amount is the HELD estimate — informational; approval entries
+          // never touch the spend counters.
+          cost: {
+            amount: plan.estimateLedgerMicros,
+            currency: config.ledgerCurrency,
+            tokens_in: 0,
+            tokens_out: 0,
+          },
+        },
+        spendProjector()
+      );
+      if (appended.kind !== 'appended') {
+        throw new Error('approval.requested append refused');
+      }
+      requested = appended.entry;
+    } catch {
+      return {
+        kind: 'refused',
+        reply: reply
+          .code(503)
+          .send({ error: 'could not record the approval request — refusing to act (fail-closed)' }),
+      };
+    }
+
+    const created = approvals.create({
+      requestHash: plan.requestHash,
+      estimateMicros: plan.estimateLedgerMicros,
+      currency: config.ledgerCurrency,
+      model: plan.model,
+      target: ctx.providerHost,
+      actor: ctx.actor,
+      mandateId: activeMandate.id,
+      thresholdMicros,
+    });
+    const baseUrl = config.publicBaseUrl ?? `http://127.0.0.1:${config.port}`;
+    const amount = (plan.estimateLedgerMicros / 1_000_000).toFixed(4);
+    const threshold = (thresholdMicros / 1_000_000).toFixed(2);
+    try {
+      await (notifier as Notifier).send({
+        approvalId: created.id,
+        title: `Mandare: approve ~${amount} ${config.ledgerCurrency}?`,
+        message:
+          `Agent ${ctx.actor} wants ${plan.model} via ${ctx.providerHost} — estimated ` +
+          `${amount} ${config.ledgerCurrency}, above your ${threshold} ${config.ledgerCurrency} ` +
+          `threshold (mandate ${activeMandate.id}). No decision by ${created.expiresAtIso} = deny.`,
+        approveUrl: `${baseUrl}/approvals/${created.id}`,
+        denyUrl: `${baseUrl}/approvals/${created.id}`,
+        approveBody: JSON.stringify({ token: created.approveToken }),
+        denyBody: JSON.stringify({ token: created.denyToken }),
+        expiresAt: created.expiresAtIso,
+      });
+    } catch {
+      const refusal = await recordDenied(reply, {
+        actor: ctx.actor,
+        requestHash: plan.requestHash,
+        target: ctx.providerHost,
+        estimateLedgerMicros: plan.estimateLedgerMicros,
+        code: 'APPROVAL_PUSH_FAILED',
+        reasons: ['the approval push could not be delivered — refusing (fail-closed)'],
+      });
+      return { kind: 'refused', reply: refusal };
+    }
+
+    const outcome = await created.outcome;
+    const decisionType =
+      outcome === 'approved'
+        ? APPROVAL_GRANTED
+        : outcome === 'denied'
+          ? APPROVAL_DENIED
+          : APPROVAL_EXPIRED;
+    // The decision is committed via request_hash (same pattern as kill
+    // reasons): approval id + outcome + the held call's hash, tamper-evident.
+    const decisionHash = sha256Hex(
+      canonicalJson({ approval_id: created.id, decision: outcome, request_hash: plan.requestHash })
+    );
+    let decisionEntry: LedgerEntryV1 | null = null;
+    try {
+      const appended = await ledger.appendProjected(
+        {
+          // Human decisions are attributed to the accountable human — the
+          // mandate principal (timeouts too: the principal's window lapsed).
+          actor: activeMandate.principal,
+          mandate_id: activeMandate.id,
+          action: { type: decisionType, target: ctx.providerHost, request_hash: decisionHash },
+          cost: { amount: 0, currency: config.ledgerCurrency, tokens_in: 0, tokens_out: 0 },
+          outcome_ref: requested.entry_hash,
+        },
+        spendProjector()
+      );
+      decisionEntry = appended.kind === 'appended' ? appended.entry : null;
+    } catch {
+      decisionEntry = null;
+    }
+
+    if (outcome === 'approved') {
+      if (decisionEntry === null) {
+        // An approval that cannot be recorded does not exist (R3: the entry
+        // gates the act, not the human's click).
+        return {
+          kind: 'refused',
+          reply: reply
+            .code(503)
+            .send({ error: 'approval granted but could not be recorded — refusing to act (fail-closed)' }),
+        };
+      }
+      return { kind: 'approved', grantedEntryHash: decisionEntry.entry_hash };
+    }
+    const refusal = await recordDenied(reply, {
+      actor: ctx.actor,
+      requestHash: plan.requestHash,
+      target: ctx.providerHost,
+      estimateLedgerMicros: plan.estimateLedgerMicros,
+      code: outcome === 'denied' ? 'APPROVAL_DENIED' : 'APPROVAL_TIMEOUT',
+      reasons: [
+        outcome === 'denied'
+          ? 'the human denied this call'
+          : `no human decision within ${config.approvalTimeoutMs}ms — refusing (fail-closed)`,
+      ],
+    });
+    return { kind: 'refused', reply: refusal };
+  }
+
   /** Record a refusal as a DENIED ledger entry, then 403. */
   async function recordDenied(
     reply: FastifyReply,
     args: {
+      actor: string;
       requestHash: string;
       target: string;
       estimateLedgerMicros: number;
@@ -726,7 +1168,7 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
     try {
       const appended = await ledger.appendProjected(
         {
-          actor: config.actor,
+          actor: args.actor,
           mandate_id: mandate?.id ?? 'mnd_unconfigured',
           action: { type: LLM_CALL_DENIED, target: args.target, request_hash: args.requestHash },
           // A denied entry's amount is the REFUSED estimate — never spend,
@@ -762,7 +1204,7 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
     try {
       const appended = await ledger.appendProjected(
         {
-          actor: config.actor,
+          actor: intent.actor,
           mandate_id: intent.mandate_id,
           action: {
             type: LLM_CALL_RESULT,

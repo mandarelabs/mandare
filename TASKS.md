@@ -557,7 +557,268 @@ confirmed clean. Fixed same-session:
 
 ---
 
-## → S4 handoff (mandates + approvals)
+## S4 — Mandates + approvals + passport v1 (2026-07-22)
+
+**Scope (per S3 handoff + founder rulings):** `packages/passport` (did:key v1,
+owner→agent delegation credential as SD-JWT VC, mock IDV + local attestation
+authority, mandate SD-JWT VC transport) · RFC 9421 request signatures via
+web-bot-auth incl. Content-Digest (closes S3 HIGH-1) · gateway passport auth +
+mandate revocation (reuse S3's status-list vocabulary) · CIBA-style async
+approvals (ntfy default, pluggable) · Demo 3 "one signed mandate replaces 40
+prompts" as a CI acceptance test · red-team additions · vault import-env + thin
+.env.
+
+**Status: complete.** All exit criteria met: Demo 3 scripted + captured +
+in CI; red-team additions green on both drivers; full gate green
+(build/typecheck/lint+license/test/red-team/smoke/demo×3); Code Reviewer pass
+done (findings below). S0–S3 red-team floor and Demos 1–2 frozen and green.
+Test totals: 466 unit/integration + all red-team suites.
+
+### Done
+
+- **`packages/passport`** (Apache-2.0, the new WHO layer) — offline-verifiable,
+  embeddable like the verifier:
+  - **did:key v1** (`did-key.ts` + hand-rolled `base58.ts`): Ed25519 only,
+    multibase base58btc + multicodec `0xed01`, for `principal` and `agent`.
+    Pinned to a published W3C did:key vector; rejects non-Ed25519 multicodecs
+    (secp256k1 same-shape forgery caught), non-base58btc, wrong length. No
+    resolver, no network (founder ruling 1).
+  - **SD-JWT VCs** (Q2, `@sd-jwt/core` + `@sd-jwt/sd-jwt-vc`): all issuers are
+    did:key, so verification is fully offline — the issuer key is derived from
+    `iss`. Owner attestation (`attestation.ts`), agent delegation credential
+    (`delegation.ts`, chain: authority → owner-attestation → owner-signed
+    credential binding the agent's `cnf` key), mandate transport
+    (`mandate-vc.ts`). Deliberately NOT using the SD-JWT `status` fetch —
+    revocation enforcement reads the ledger projection (S3 rule); credentials
+    carry `revocation_ref` in the shared vocabulary.
+  - **Mock IDV** (`idv.ts`, founder ruling 2): `IdvProvider` interface +
+    `MockIdvProvider`; attestation record is ONLY `{kyc_level, partner_id,
+    date, ref_hash}` — no PII anywhere (that IS the production shape; real IDV
+    is a config swap). Local attestation authority = self-contained key.
+  - **RFC 9421 request signatures** (Q3, `request-signature.ts`,
+    Cloudflare `web-bot-auth`): agents sign every request under the passport's
+    asymmetric key over `@method/@path/@authority/content-digest/
+    signature-agent`. Content-Digest (RFC 9530) over exact body bytes closes
+    S3's HIGH-1 (body-swap). Verifier REQUIRES all five components (web-bot-auth
+    accepts whatever Signature-Input declares; we don't), enforces keyid ==
+    passport cnf key, bounded created/expires window, single-use nonce claimed
+    LAST (a bad probe can't burn a client's nonce — the S3 lesson carried
+    over).
+- **Mandate SD-JWT VC** keeps the FROZEN `MandateV1` JSON self-contained: the
+  detached owner signature inside the payload still verifies standalone; the
+  SD-JWT envelope adds standards-world transport, not a replacement. Both
+  signatures are the same owner key. `billing_identity` carried through
+  (dormant). `packages/spec` untouched (R6).
+- **`packages/gateway`**: new `authMode: 'passport'` — verify the delegation
+  chain offline against `MANDARE_TRUST_AUTHORITY`, then the RFC 9421 signature
+  with the cnf key over the EXACT raw body (a passport-mode content-type parser
+  keeps the raw buffer in a WeakMap for the digest check); the verified actor
+  DID flows into every ledger entry and the policy identity check (WHO, not a
+  configured holder). Mandate revocation: `mandateSubject(mandate.id)` added to
+  the per-request revocation check in ALL modes; `MANDATE_REVOKED` refusal
+  recorded. Legacy token/none modes and Demos 1–2 unchanged (kill-before-auth
+  ordering preserved).
+- **CIBA approvals** (`approvals.ts` + gateway hold flow, Q10/Q19): over-
+  threshold ⇒ `approval.requested` entry (log-before-act) → push via a
+  pluggable `Notifier` (`NtfyNotifier` with HTTP action buttons /
+  `FileNotifier` for CI) → the held HTTP request awaits → `POST /approvals/:id`
+  with a single-use 256-bit capability token (sha256-hashed at rest,
+  `timingSafeEqual`, one per Approve/Deny button) → `approval.granted`/
+  `denied`/`expired` entry BEFORE the call resumes or is refused → policy
+  re-evaluated with `context.approvedEntryHash` (waives ONLY the threshold,
+  re-checks window/budget/velocity since time passed). Every exit fail-closed:
+  no channel, failed push, failed entry, timeout → deny. Human decisions are
+  attributed to the mandate principal (the accountable human).
+- **`packages/policy-engine`**: `SpendEvaluationContext.approvedEntryHash`
+  (optional, validated 64-hex at the R4 boundary; garbage ⇒ CONTEXT_INVALID,
+  not a bypass); presence waives the approval-threshold rule for that one
+  evaluation. The old flat `APPROVAL_REQUIRED` deny is now the gateway's
+  hold-and-push trigger.
+- **`packages/ledger`**: `subject.register` revocation entry — allocates a
+  subject's status-list index at ISSUANCE (so a credential/mandate carries its
+  `revocation_ref` from birth) and NEVER changes existing state (re-register of
+  a revoked subject is not a reinstate — tested). Approval entry-type constants.
+  Both drivers; the spend and revocation projections both ignore approval/
+  register entries (no counter/status drift).
+- **`apps/cli`**: `mandare passport issue` (owner + local authority keys as JWK
+  pairs in the vault, mock IDV, fresh agent did:key, registered revocation
+  slot, agent private key written 0600 once), `mandare mandate issue` (owner-
+  signed SD-JWT VC, own revocation slot, dormant billing_identity supported),
+  `mandare kill --mandate <id>` (the permission slip dies, the agent survives).
+  `mandare verify` renders the approval trail (HELD → APPROVED/DENIED/PENDING
+  by whom) and registered subjects. `loadMandate` FULL-verifies an SD-JWT VC
+  file (envelope + schema + detached sig) and still accepts legacy JSON for the
+  frozen demos.
+- **`packages/vault`**: `getIdentityKey`/`putIdentityKey` (owner/authority JWK
+  pairs), `claimSignatureNonce` (persistent single-use nonce table for RFC 9421
+  — a door restart can't reopen a replay window; in-memory default for tests).
+- **Demo 3** (`scripts/demo-mandate.mjs`, `pnpm demo:mandate`, CI job): a
+  passport-carrying agent runs 6 in-scope steps under one mandate with ZERO
+  prompts; step 7 (~€0.28, over the €0.25 threshold) pauses → file push →
+  human APPROVE → continues; step 8 → human DENY → refusal on the ledger;
+  `mandare verify --spend` proves chain VALID, counters == replay, and both
+  human decisions in the approval trail. Every call RFC-9421-signed. ASSERTS
+  everything (R7). Capture: `docs/demos/S4-mandate-demo.txt`.
+- **Red-team additions** (`gateway/test/red-team/mandate-and-approval.test.ts`,
+  in `pnpm red-team`): forged mandate signature (tampered VC won't load),
+  expired mandate (envelope exp + per-request window), scope escalation (agent
+  A's valid passport can't spend under B's mandate → IDENTITY_MISMATCH,
+  attributed to A's verified DID), delegation-chain break (rogue authority →
+  PASSPORT_INVALID), signature replay + body-swap at the door (REPLAYED_NONCE,
+  BODY_DIGEST_MISMATCH), tampered/replayed approval (forged token can't decide,
+  used token can't re-approve or approve a second call). Passport package has
+  its own tamper suite (forged claims, wrong owner, untrusted authority,
+  expired/not-yet-valid).
+- **Vault bootstrap**: ran `mandare vault import-env` (keychain backend) — all
+  four provider/management keys now live in the OS-keychain-backed vault
+  (`./mandare-vault.db`, gitignored) — and thinned `.env` to bootstrap-only
+  (no live secret values remain), per S3's design intent (R2).
+
+### Decisions (S4 latitude; BUILD-DECISIONS untouched)
+
+1. **One revocation vocabulary, three namespaces.** `subject.register` +
+   `mandateSubject`/`agentSubject`/`doorSubject` reuse S3's status-list
+   projection exactly — no second revocation machinery (founder ruling; Q4).
+   Mandate kill flips a slot; agent/door kill flip theirs; all render into the
+   same IETF bitstring S6 publishes.
+2. **Mandate VC is transport, the detached signature is truth.** The frozen
+   `MandateV1` stays self-verifying (detached Ed25519 over canonical JSON); the
+   SD-JWT envelope wraps it for the OAuth/standards world. Two signatures, one
+   owner key — no schema change (R6), and the S0-frozen mandate contract is
+   intact.
+3. **Approval decision = single-use capability token, not agent auth.** The
+   HUMAN decides via a token minted into the push (hashed at rest, constant-
+   time, one per button, dead after first use / timeout). Agent passports/
+   tokens play no role at `/approvals` — the accountable human's click is the
+   authority, recorded as a principal-attributed ledger entry.
+4. **Approval waiver is per-evaluation and threshold-only.** A recorded
+   `approval.granted` hash waives ONLY the threshold rule; the gateway re-runs
+   the FULL SPEC §5 order afterward (window/budget/velocity may have moved
+   while the call was held). The waiver field is validated at the R4 boundary.
+5. **Passport mode parses its own JSON body** to keep the exact bytes for the
+   Content-Digest check (Fastify's default parser discards them). Schema
+   validation still applies to the parsed object; a non-JSON body is a 400.
+6. **did:web documented as the future org profile** (maps onto the S1 key
+   directory), out of scope now (founder ruling 1). did:key v1 is the whole
+   identity surface for solo mode.
+
+### Deviations from BUILD-DECISIONS
+
+None. (`web-bot-auth` 0.1.3 is the Q3-decided library — unaudited, in our audit
+scope per Q3; used only for the RFC 9421 sign/verify plumbing, with our own
+required-component + window + nonce + digest enforcement layered on top.
+`@sd-jwt/core`/`sd-jwt-vc` 0.20.0 are the Q2 libraries.)
+
+### Review pass (Code Reviewer subagent, full S4 diff)
+
+No CRITICAL. 2 HIGH + 3 MEDIUM + LOWs. Core crypto explicitly confirmed clean:
+base58/did:key codec (zero-byte convention, multicodec+length pin), SD-JWT
+algorithm-confusion neutralized (verifier always runs Ed25519 against the key
+derived from `iss`; `alg:none` can't pass; `iat`/`nbf`/`exp` enforced),
+detached-mandate preimage symmetry, Content-Digest over exact raw bytes,
+approval token handling (unconditional `timingSafeEqual`, single-use,
+decide-vs-timeout race safe), ledger-before-act ordering, R2, and the license
+boundary. Fixed same-session with regression/red-team tests:
+
+- **(HIGH-1)** RFC 9421 coverage bypass: `coveredComponents` regex-scraped
+  quoted strings, so an inner-list member with DECOY PARAMETERS
+  (`("@method";a="@path";b="content-digest")`) passed the required-component
+  check while the signature actually covered only `@method` — silently
+  reopening the body-binding gap. Now parses the inner list structurally and
+  REFUSES any parameter inside it (we never sign parametrized components);
+  red-team case added.
+- **(HIGH-2)** A kill (agent/mandate/door) landing WHILE a call was HELD for
+  approval was not re-checked on resume — an approve after the kill would
+  spend. `revocationRefusal(actor)` now re-runs before the resumed call
+  executes; "revoked instantly" holds even across a long approval window.
+  Red-team case (kill-during-hold) added.
+- **(MEDIUM-1)** The verified delegation chain wasn't bound to the mandate:
+  any owner the authority ever attested could name the agent's key. Passport
+  mode now requires `passport.ownerDid === mandate.principal` (for did:key
+  principals) and, if the credential names a mandate, that it be this one
+  (`OWNER_MISMATCH`/`MANDATE_MISMATCH`); red-team case added.
+- **(MEDIUM-2)** Held calls reserve nothing, so they escaped the velocity
+  counter — a looping agent could flood pushes (notification-fatigue phishing
+  vector), sockets, and fsync'd `approval.requested` entries. Added
+  `MANDARE_MAX_PENDING_APPROVALS` (default 8); over it, `APPROVAL_BACKLOG`
+  DENIED without a push. Red-team case added.
+- **(MEDIUM-3)** Approval capability tokens transit whatever ntfy server is
+  configured; on the PUBLIC ntfy.sh the topic name is the only secret. Loud
+  startup warning added when the public default is used (self-host / token-
+  protect the topic for anything real).
+- **(LOWs fixed)** agent-key file now written with `wx` (refuses to overwrite a
+  private key, L3); `mandate issue --agent` validated as did:key (L6); in-memory
+  nonce store in passport mode without a vault now warns at startup (L5).
+- **(LOWs recorded, not actioned)** `@query` not in required components (no
+  query-bearing routes yet, L1); pre-decode length bound on did:key (bounded by
+  Node's header cap, L2); FileNotifier 0644 (CI-only, L4); corrupt vault
+  identity-key JSON gives a raw crypto error not a clean message (L7); pre-auth
+  throttled DENIED entries carry the asserted `config.actor` (L8).
+
+### Known debt (intentional, scheduled)
+
+- Approval pending map is in-memory: a gateway restart drops in-flight holds
+  (they fail closed — the agent retries). Persistence is an S5+ nicety, not a
+  correctness gap.
+- `did:web` organization profile + a hosted attestation authority (cloud) are
+  S5/S6 (private-repo service).
+- OpenRouter provisioning `disableKey` still not wired into `mandare kill`
+  (needs the per-agent key-hash map; the LOCAL authority is complete without it).
+- ntfy is the only shipped Notifier adapter; Telegram (grammY) deferred — the
+  interface is pluggable and file/mock cover CI. For real approvals, self-host
+  ntfy or protect the topic (MEDIUM-3 warning fires otherwise).
+- The remaining LOWs above (L1/L2/L4/L7/L8) — cosmetic/bounded, no correctness
+  or spend impact.
+
+---
+
+## → S5 handoff (money rails + registry, or witness — founder's call)
+
+Read SPEC §7 (money layer: card rail via Stripe Issuing, x402), §8 (registry &
+certification), §6 continued (witnessing = S6), and the S4 decisions above.
+S4 delivered the WHO (passport) and finished the MAY (mandate + approvals);
+S5 is the founder's pick among the remaining layers.
+
+Inherit from S4:
+
+1. **Passport identity is live** — the verified actor is the agent's did:key,
+   proven per-request (RFC 9421 + Content-Digest). Any new door (card auth
+   webhook, x402 signer) should authenticate the same way; `packages/passport`
+   is the shared, Apache, embeddable surface.
+2. **One revocation vocabulary spans agents, doors, AND mandates** — new
+   subject types (e.g. a card token) get a `subject.register` + a namespace
+   helper; do NOT add a second projection.
+3. **Approvals are a general hold-push-decide primitive**, not LLM-specific:
+   the card-authorization webhook (Stripe's 2s budget, Q11) can reuse
+   `ApprovalService` for step-up approval, and the Notifier interface is ready
+   for the Telegram adapter if iOS delivery matters.
+4. **Mandate ↔ passport binding is already enforced** (S4 review MEDIUM-1):
+   passport mode requires the credential owner == mandate principal and, if the
+   credential names a mandate, that it match. New doors should keep that
+   invariant; issuing credentials WITH a `mandate_ref` (the CLI can populate
+   it) tightens it further.
+5. Keep BOTH red-team drivers green (now includes the S4 passport/approval/
+   mandate-revocation suites). Any money rail adds its own tamper + fail-closed
+   suite (R5/R7) and its acceptance demo (R7).
+
+**From the founder — needed for S5 (decisions, not blocking):**
+- **Which layer next:** money rails (Stripe Issuing card rail — apply EARLY per
+  Q11, test mode is instant; or x402/CDP), OR the verified service registry
+  (§8, feeds `counterparties: verified_only` which currently fails closed), OR
+  jump to S6 witnessing. The card rail is the most demo-able "hard enforcement"
+  story (auth-time decline), matches the "mandated payments" pitch, and its
+  webhook reuses the approval primitive.
+- **Stripe Connect/Issuing onboarding** (German UG/GmbH path, Q11) — start the
+  KYB/use-case review now if the card rail is next; days-to-weeks lead time,
+  but test mode needs nothing.
+- **Real IDV partner** (IDnow/Persona, EU) — still stubbed as the mock provider;
+  a config swap once the company entity exists. Not blocking passport issuance.
+- **Still pending from S2/S3:** the OpenRouter provisioning key is live-verified;
+  only wiring `disableKey` into `mandare kill` (the cloud belt) remains.
+
+---
+
+## → S4 handoff (mandates + approvals) — ORIGINAL (fulfilled — see the S4 log above)
 
 Read BUILD-DECISIONS Q2 (`@sd-jwt/core` + `@sd-jwt/sd-jwt-vc` for credentials)
 and Q4 (`@sd-jwt/jwt-status-list` — the SAME library S3 already uses), SPEC §4

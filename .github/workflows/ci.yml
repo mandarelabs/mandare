@@ -67,3 +67,8 @@ jobs:
       # `mandare kill` halts a running agent mid-task with the refusal on the
       # ledger. Uses the vault's explicit file backend (no OS keychain in CI).
       - run: pnpm demo:dead-paper
+      # The S4 acceptance demo (R7): one signed mandate replaces 40 permission
+      # prompts — passport-authenticated multi-step task, async human approval
+      # (approve + deny), the whole sequence proven by `mandare verify`.
+      # Mock notifier (file channel), no secrets.
+      - run: pnpm demo:mandate

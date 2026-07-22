@@ -22,6 +22,7 @@
   },
   "dependencies": {
     "@mandarelabs/ledger": "workspace:*",
+    "@mandarelabs/passport": "workspace:*",
     "@mandarelabs/spec": "workspace:*",
     "@mandarelabs/vault": "workspace:*",
     "@mandarelabs/verifier": "workspace:*"

@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 
 import { parseMandate, type MandateV1 } from '@mandarelabs/spec';
+import { verifyMandateVc } from '@mandarelabs/passport';
 
 /**
  * Gateway configuration from environment. Provider keys come from env in S2
@@ -16,14 +17,18 @@ export interface ProviderEndpoint {
 }
 
 /**
- * Door-local authentication mode for the spend routes (S3, closing the S2
- * review's deferred MEDIUM). `token` requires a vault-issued proof-of-
- * possession token; `none` is the S2 localhost-only behavior; `auto`
- * (default) requires a token IFF a vault is wired — "if you have a vault, the
- * door authenticates." Full actor identity is still S4 (passports): a valid
- * token proves an authorized holder minted it for this door, not yet WHO.
+ * Door-local authentication mode for the spend routes. `token` requires a
+ * vault-issued proof-of-possession token (S3); `none` is the S2
+ * localhost-only behavior; `auto` (default) requires a token IFF a vault is
+ * wired — "if you have a vault, the door authenticates." `passport` (S4)
+ * requires an RFC 9421 request signature by the agent key a verified
+ * delegation credential binds — real actor identity, not just an authorized
+ * holder; it needs MANDARE_TRUST_AUTHORITY (the attestation authority DID).
  */
-export type GatewayAuthMode = 'auto' | 'token' | 'none';
+export type GatewayAuthMode = 'auto' | 'token' | 'none' | 'passport';
+
+/** Approval push channel (Q10/Q19): ntfy default, file for CI/demos. */
+export type NotifierKind = 'none' | 'ntfy' | 'file';
 
 export interface GatewayConfig {
   host: string;
@@ -53,6 +58,22 @@ export interface GatewayConfig {
   maxIntentsPerMinute: number;
   /** Optional operator pricing table (JSON) merged over the defaults. */
   pricingPath: string | null;
+  /**
+   * The attestation authority DID this door trusts (passport mode). null =
+   * passport auth cannot verify any delegation chain → fail closed.
+   */
+  trustedAuthorityDid: string | null;
+  /** Approval push channel; 'none' = above-threshold calls are denied (S2 behavior). */
+  notifier: NotifierKind;
+  ntfyUrl: string;
+  ntfyTopic: string | null;
+  notifyFilePath: string | null;
+  /** How long a held call waits for the human before fail-closed denial. */
+  approvalTimeoutMs: number;
+  /** Max calls held awaiting a human decision at once (flood/notification-fatigue guard). */
+  maxPendingApprovals: number;
+  /** Base URL the approval action buttons POST back to (reachability is deployment-specific). */
+  publicBaseUrl: string | null;
   anthropic: ProviderEndpoint;
   openai: ProviderEndpoint;
   openrouter: ProviderEndpoint;
@@ -62,6 +83,9 @@ export interface GatewayConfig {
 
 const DEFAULT_PORT = 8484;
 const DEFAULT_MAX_INTENTS_PER_MINUTE = 60;
+const DEFAULT_APPROVAL_TIMEOUT_MS = 120_000;
+const DEFAULT_MAX_PENDING_APPROVALS = 8;
+const DEFAULT_NTFY_URL = 'https://ntfy.sh';
 
 function stripSlashes(url: string): string {
   return url.replace(/\/+$/, '');
@@ -102,8 +126,33 @@ export function loadConfigFromEnv(env: Record<string, string | undefined>): Gate
       : positiveNumber(env.MANDARE_USD_PER_LEDGER_UNIT, 'MANDARE_USD_PER_LEDGER_UNIT');
 
   const authModeRaw = env.MANDARE_GATEWAY_AUTH ?? 'auto';
-  if (authModeRaw !== 'auto' && authModeRaw !== 'token' && authModeRaw !== 'none') {
-    throw new Error(`invalid MANDARE_GATEWAY_AUTH: ${authModeRaw} (expected 'auto', 'token', or 'none')`);
+  if (
+    authModeRaw !== 'auto' &&
+    authModeRaw !== 'token' &&
+    authModeRaw !== 'none' &&
+    authModeRaw !== 'passport'
+  ) {
+    throw new Error(
+      `invalid MANDARE_GATEWAY_AUTH: ${authModeRaw} (expected 'auto', 'token', 'none', or 'passport')`
+    );
+  }
+  const notifierRaw = env.MANDARE_NOTIFIER ?? 'none';
+  if (notifierRaw !== 'none' && notifierRaw !== 'ntfy' && notifierRaw !== 'file') {
+    throw new Error(`invalid MANDARE_NOTIFIER: ${notifierRaw} (expected 'none', 'ntfy', or 'file')`);
+  }
+  const approvalTimeoutMs =
+    env.MANDARE_APPROVAL_TIMEOUT_MS === undefined
+      ? DEFAULT_APPROVAL_TIMEOUT_MS
+      : Number(env.MANDARE_APPROVAL_TIMEOUT_MS);
+  if (!Number.isInteger(approvalTimeoutMs) || approvalTimeoutMs < 1_000) {
+    throw new Error('invalid MANDARE_APPROVAL_TIMEOUT_MS: must be an integer ≥ 1000');
+  }
+  const maxPendingApprovals =
+    env.MANDARE_MAX_PENDING_APPROVALS === undefined
+      ? DEFAULT_MAX_PENDING_APPROVALS
+      : Number(env.MANDARE_MAX_PENDING_APPROVALS);
+  if (!Number.isInteger(maxPendingApprovals) || maxPendingApprovals < 1) {
+    throw new Error('invalid MANDARE_MAX_PENDING_APPROVALS: must be a positive integer');
   }
   const allowedHosts = (env.MANDARE_GATEWAY_ALLOWED_HOSTS ?? '')
     .split(',')
@@ -132,6 +181,14 @@ export function loadConfigFromEnv(env: Record<string, string | undefined>): Gate
     usdPerLedgerUnit,
     maxIntentsPerMinute: maxPerMinute,
     pricingPath: env.MANDARE_PRICING_PATH ?? null,
+    trustedAuthorityDid: env.MANDARE_TRUST_AUTHORITY ?? null,
+    notifier: notifierRaw,
+    ntfyUrl: env.MANDARE_NTFY_URL ?? DEFAULT_NTFY_URL,
+    ntfyTopic: env.MANDARE_NTFY_TOPIC ?? null,
+    notifyFilePath: env.MANDARE_NOTIFY_FILE ?? null,
+    approvalTimeoutMs,
+    maxPendingApprovals,
+    publicBaseUrl: env.MANDARE_GATEWAY_PUBLIC_URL ?? null,
     // Base-URL conventions follow each provider's own SDK: Anthropic's
     // ANTHROPIC_BASE_URL excludes /v1 (the adapter path carries it), while
     // OpenAI/OpenRouter base URLs include their /v1.
@@ -152,10 +209,20 @@ export function loadConfigFromEnv(env: Record<string, string | undefined>): Gate
 }
 
 /**
- * Load and schema-validate the mandate the gateway enforces. v0 trusts the
- * operator-configured file (owner-signature verification arrives with
- * SD-JWT transport in S4); schema validation still applies in full (R4).
+ * Load the mandate the gateway enforces.
+ *
+ * - SD-JWT VC file (S4, the real path): FULL verification — envelope owner
+ *   signature (key derived from the principal's did:key), frozen-schema
+ *   parse, and the detached owner signature over the canonical payload. A
+ *   mandate that does not verify does not load (R1).
+ * - Legacy JSON file (S0–S3 dev mandates, frozen demos): schema validation
+ *   only — the operator-configured file is trusted, as documented since S2.
+ *   Legacy principals are not did:key, so there is no key to verify against.
  */
-export function loadMandate(path: string): MandateV1 {
-  return parseMandate(JSON.parse(readFileSync(path, 'utf8')));
+export async function loadMandate(path: string): Promise<MandateV1> {
+  const content = readFileSync(path, 'utf8').trim();
+  if (content.startsWith('{')) {
+    return parseMandate(JSON.parse(content));
+  }
+  return verifyMandateVc(content);
 }

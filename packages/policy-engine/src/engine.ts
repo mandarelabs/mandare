@@ -50,6 +50,14 @@ export interface SpendEvaluationContext {
   /** Counterparty identifier — the provider host for llm.call. */
   counterparty: string;
   counters: SpendCounterSnapshot;
+  /**
+   * Set ONLY by the gateway after a human approval decision was verified and
+   * recorded as a ledger entry (S4): the approval.granted entry hash. Its
+   * presence waives the approval-threshold check for THIS evaluation —
+   * nothing else. Never populated from agent input (R4: the context is
+   * door-constructed, not caller-supplied).
+   */
+  approvedEntryHash?: string;
 }
 
 export function spendLimitsFromScope(scope: SpendScope): SpendLimits {
@@ -121,7 +129,7 @@ function isCounterSnapshot(value: unknown): value is SpendCounterSnapshot {
 export function parseSpendContext(
   context: Readonly<Record<string, unknown>>
 ): SpendEvaluationContext | null {
-  const { estimateMicros, currency, counterparty, counters } = context;
+  const { estimateMicros, currency, counterparty, counters, approvedEntryHash } = context;
   if (!Number.isSafeInteger(estimateMicros) || (estimateMicros as number) < 0) {
     return null;
   }
@@ -134,7 +142,19 @@ export function parseSpendContext(
   if (!isCounterSnapshot(counters)) {
     return null;
   }
-  return { estimateMicros: estimateMicros as number, currency, counterparty, counters };
+  if (
+    approvedEntryHash !== undefined &&
+    (typeof approvedEntryHash !== 'string' || !/^[0-9a-f]{64}$/.test(approvedEntryHash))
+  ) {
+    return null;
+  }
+  return {
+    estimateMicros: estimateMicros as number,
+    currency,
+    counterparty,
+    counters,
+    ...(approvedEntryHash === undefined ? {} : { approvedEntryHash }),
+  };
 }
 
 /**
@@ -249,8 +269,11 @@ export class MandatePolicyEngine implements PolicyEngine {
       );
     }
 
-    // 6. Approval threshold: rules we cannot evaluate or satisfy deny —
-    //    the async approval push lands in S4.
+    // 6. Approval threshold. A recorded human approval (the gateway sets
+    //    approvedEntryHash only after the approval.granted ledger entry
+    //    persisted) waives the threshold for this one evaluation; otherwise
+    //    an over-threshold call denies with APPROVAL_REQUIRED — the gateway
+    //    turns that into the CIBA-style hold-and-push (S4).
     for (const rule of mandate.approvals.rules) {
       if (rule.currency !== context.currency) {
         return deny(
@@ -258,11 +281,11 @@ export class MandatePolicyEngine implements PolicyEngine {
           `approval rule is in ${rule.currency} but the call is budgeted in ${context.currency} — refusing (fail-closed)`
         );
       }
-      if (context.estimateMicros > rule.above) {
+      if (context.approvedEntryHash === undefined && context.estimateMicros > rule.above) {
         return deny(
           'APPROVAL_REQUIRED',
           `estimate ${formatMicros(context.estimateMicros, context.currency)} exceeds the ` +
-            `${formatMicros(rule.above, rule.currency)} approval threshold; async human approval lands in S4 — refusing until then (fail-closed)`
+            `${formatMicros(rule.above, rule.currency)} approval threshold — async human approval required`
         );
       }
     }

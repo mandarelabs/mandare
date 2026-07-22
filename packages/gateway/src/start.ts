@@ -12,9 +12,12 @@ import {
 import { MandatePolicyEngine } from '@mandarelabs/policy-engine';
 import { Vault, loadVaultConfigFromEnv } from '@mandarelabs/vault';
 
+import type { NonceStore } from '@mandarelabs/passport';
+
 import { loadConfigFromEnv, loadMandate, type GatewayConfig, type ProviderEndpoint } from './config.js';
 import { loadPricingTable, DEFAULT_PRICING } from './pricing.js';
 import { buildGateway } from './server.js';
+import { FileNotifier, NtfyNotifier, type Notifier } from './approvals.js';
 import type { GatewayVault } from './auth.js';
 
 /**
@@ -89,7 +92,7 @@ if (!revVerdict.ok) {
   await rebuildRevocationProjection(ledger);
 }
 
-const mandate = config.mandatePath === null ? null : loadMandate(config.mandatePath);
+const mandate = config.mandatePath === null ? null : await loadMandate(config.mandatePath);
 const policy =
   mandate === null
     ? // No mandate → no engine; the gateway keeps the spend path CLOSED and
@@ -100,6 +103,55 @@ const policy =
         velocity: { maxIntentsPerMinute: config.maxIntentsPerMinute },
       });
 
+// Approval push channel (S4, Q10/Q19): ntfy for real deployments, file for
+// CI/demos, none = above-threshold calls are denied outright.
+let notifier: Notifier | undefined;
+if (config.notifier === 'ntfy') {
+  if (config.ntfyTopic === null) {
+    console.error('mandare gateway: MANDARE_NOTIFIER=ntfy requires MANDARE_NTFY_TOPIC (fail-closed).');
+    process.exit(1);
+  }
+  // The push carries single-use approve/deny capability tokens. On the PUBLIC
+  // ntfy.sh the topic name is the only secret — anyone subscribed to the topic
+  // can approve a held call before the human sees it. Warn loudly; self-host or
+  // use an access-token-protected topic for anything real (MEDIUM-3).
+  if (config.ntfyUrl === 'https://ntfy.sh') {
+    console.warn(
+      'mandare gateway: WARNING — MANDARE_NOTIFIER=ntfy is using the PUBLIC ntfy.sh. Approval\n' +
+        '  capability tokens transit a public server where the topic name is the only secret.\n' +
+        '  Self-host ntfy (MANDARE_NTFY_URL) or protect the topic before relying on approvals.'
+    );
+  }
+  notifier = new NtfyNotifier(config.ntfyUrl, config.ntfyTopic);
+} else if (config.notifier === 'file') {
+  if (config.notifyFilePath === null) {
+    console.error('mandare gateway: MANDARE_NOTIFIER=file requires MANDARE_NOTIFY_FILE (fail-closed).');
+    process.exit(1);
+  }
+  notifier = new FileNotifier(config.notifyFilePath);
+}
+
+// Passport mode needs a trust anchor, and uses the vault's persistent nonce
+// table so a door restart cannot reopen a signature-replay window.
+if (config.authMode === 'passport' && config.trustedAuthorityDid === null) {
+  console.error(
+    'mandare gateway: MANDARE_GATEWAY_AUTH=passport requires MANDARE_TRUST_AUTHORITY (the attestation authority DID) — refusing to start (fail-closed).'
+  );
+  process.exit(1);
+}
+const nonceStore: NonceStore | undefined =
+  vault === null ? undefined : { claim: (key, expiresAt) => (vault as Vault).claimSignatureNonce(key, expiresAt) };
+// Passport mode without a vault-backed nonce table falls back to an in-memory
+// store: a door restart forgets claimed nonces, reopening a replay window up
+// to the remaining signature validity (≤300s). Warn (L5).
+if (config.authMode === 'passport' && nonceStore === undefined) {
+  console.warn(
+    'mandare gateway: WARNING — passport mode without a vault uses an in-memory nonce store; a\n' +
+      '  restart reopens a signature-replay window (≤300s). Wire a vault (MANDARE_VAULT=1) for a\n' +
+      '  persistent nonce table.'
+  );
+}
+
 const pricingTable = config.pricingPath === null ? DEFAULT_PRICING : loadPricingTable(config.pricingPath);
 const app = buildGateway({
   config,
@@ -108,9 +160,14 @@ const app = buildGateway({
   mandate,
   pricingTable,
   ...(gatewayVault === undefined ? {} : { vault: gatewayVault }),
+  ...(notifier === undefined ? {} : { notifier }),
+  ...(nonceStore === undefined ? {} : { nonceStore }),
 });
 
-const tokenAuth = config.authMode === 'token' || (config.authMode === 'auto' && useVault);
+const tokenAuth =
+  config.authMode === 'token' ||
+  config.authMode === 'passport' ||
+  (config.authMode === 'auto' && useVault);
 // The Host allowlist stops browser DNS-rebinding, not direct clients that set
 // their own Host header. Binding off-loopback WITHOUT token auth leaves the
 // spend routes reachable by any host on the network — refuse to do it quietly.

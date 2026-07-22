@@ -1,0 +1,72 @@
+════════════════════════════════════════════════════════════════════
+ MANDARE DEMO 3 — one signed mandate replaces 40 permission prompts
+════════════════════════════════════════════════════════════════════
+
+[owner]  passport issued for agent did:key:z6Mkjwq2vDhHfhn2…
+         chain: authority → owner (KYC level 1, mock:local) → agent
+[owner]  mandate mnd_5450f0fbd6e7 signed ONCE: €5/tx, €20/day, ask me above €0.25.
+
+[door]   gateway up at http://127.0.0.1:63768 — passport auth (RFC 9421 + Content-Digest), push channel wired.
+
+[agent]  running the task: 6 in-scope steps under the one mandate…
+[agent]  step 1/6  signed call (~€0.001)          → 200 OK — no human involved
+[agent]  step 2/6  signed call (~€0.001)          → 200 OK — no human involved
+[agent]  step 3/6  signed call (~€0.001)          → 200 OK — no human involved
+[agent]  step 4/6  signed call (~€0.001)          → 200 OK — no human involved
+[agent]  step 5/6  signed call (~€0.001)          → 200 OK — no human involved
+[agent]  step 6/6  signed call (~€0.001)          → 200 OK — no human involved
+         6 calls, 0 permission prompts. The mandate IS the answer.
+
+[agent]  step 7: big synthesis call (~€0.28, above the €0.25 threshold)…
+[push]   → "Mandare: approve ~0.2778 EUR?"
+[human]  taps APPROVE on the phone.
+[agent]  held call resumed                 → 200 OK (approval recorded on the ledger)
+
+[agent]  step 8: ANOTHER big call (agent got ambitious)…
+[push]   → "Mandare: approve ~0.2778 EUR?"
+[human]  taps DENY.
+[agent]  held call refused                 → 403 APPROVAL_DENIED
+         the "no" is ledger entry c4a9958cd3beeeac…
+
+$ mandare verify --db ledger.db --spend
+ledger:   /var/folders/wv/dslzb2wx45qdqzl4dmhhg78m0000gn/T/mandare-mandate-demo-GLx9B4/ledger.db
+door:     gateway:local (key b97ca09c4016…)
+entries:  21
+head:     c4a9958cd3beeeac4adc120b9d762522f72a0570625e9784a0ce7e7c327ece3f
+tree:     size=21 root=ce5097608bf3d07e8212b97d3e5997a78a5add2a0fabdebc99a7cc0b54df1250
+chain:    VALID — every entry hash-linked and door-signed
+anchor:   SELF-ANCHORED — door key taken from the ledger file itself; pass --door-key <hex> or --key-directory <path|url> from an independent source to verify authorship
+note:     record the tree head (size:root) after each verify — a later --prev-head check makes rollback and rewrites detectable; witnessing (S6) automates this off-machine.
+spend:
+  mnd_5450f0fbd6e7: settled 0.002107 EUR · open reservations 0.00 EUR · 7 call(s) · 1 refused
+trail:    (last 12 of 21 entries)
+  #10  2026-07-22T05:57:35.179Z  RESULT   settle  0.000301 EUR
+  #11  2026-07-22T05:57:35.182Z  INTENT   reserve 0.000943 EUR
+  #12  2026-07-22T05:57:35.184Z  RESULT   settle  0.000301 EUR
+  #13  2026-07-22T05:57:35.186Z  INTENT   reserve 0.000943 EUR
+  #14  2026-07-22T05:57:35.188Z  RESULT   settle  0.000301 EUR
+  #15  2026-07-22T05:57:35.191Z  approval.requested
+  #16  2026-07-22T05:57:35.293Z  approval.granted
+  #17  2026-07-22T05:57:35.293Z  INTENT   reserve 0.277795 EUR
+  #18  2026-07-22T05:57:35.295Z  RESULT   settle  0.000301 EUR
+  #19  2026-07-22T05:57:35.299Z  approval.requested
+  #20  2026-07-22T05:57:35.399Z  approval.denied
+  #21  2026-07-22T05:57:35.400Z  DENIED   refused 0.277797 EUR  ← reservation REFUSED by policy
+counters: CONSISTENT — 10 counter row(s) equal a fresh replay of the ledger (counters are a projection, never a second truth)
+approvals:
+  HELD      ~0.2778 EUR → 127.0.0.1:63766  (agent did:key:z6Mkjwq2vDhHfhn2MncypZhHaTWYM1SVyJeyf48XnoB9Fv4G, @ 2026-07-22T05:57:35.191Z, entry be82e3c2a721…)
+    → APPROVED by did:key:z6Mkw9rGDpbpVTVU2TmkNRKm3LjNHRksSEDvkZ8ofdUjXJPi @ 2026-07-22T05:57:35.293Z (entry 532913022eab…)
+  HELD      ~0.2778 EUR → 127.0.0.1:63766  (agent did:key:z6Mkjwq2vDhHfhn2MncypZhHaTWYM1SVyJeyf48XnoB9Fv4G, @ 2026-07-22T05:57:35.299Z, entry 989eccf6e79a…)
+    → DENIED by did:key:z6Mkw9rGDpbpVTVU2TmkNRKm3LjNHRksSEDvkZ8ofdUjXJPi @ 2026-07-22T05:57:35.399Z (entry affc9d9455e2…)
+subjects:
+  registered agent:did:key:z6Mkjwq2vDhHfhn2MncypZhHaTWYM1SVyJeyf48XnoB9Fv4G  (index 0, @ 2026-07-22T05:57:34.718Z, entry 4efc1e545d62…)
+  registered mandate:mnd_5450f0fbd6e7  (index 1, @ 2026-07-22T05:57:34.826Z, entry 0bbf8724263f…)
+status:   IETF Token Status List — id=agents bits=1 lst=eNpjAAAAAQAB (S6 publishes this unchanged)
+revocations: CONSISTENT — 2 record(s) equal a fresh replay of the ledger
+
+════════════════════════════════════════════════════════════════════
+ DEMO PASS: 6 in-scope calls ran with zero prompts under ONE signed
+ mandate; one over-threshold call paused for a real human APPROVE and
+ continued; a second was DENIED with the refusal on the ledger; and
+ mandare verify proves the whole sequence — human decisions included.
+════════════════════════════════════════════════════════════════════

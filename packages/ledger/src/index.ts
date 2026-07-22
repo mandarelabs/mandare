@@ -25,11 +25,19 @@ export type {
   RevocationKV,
   RevocationRecord,
 } from './store.js';
+export {
+  APPROVAL_DENIED,
+  APPROVAL_ENTRY_TYPES,
+  APPROVAL_EXPIRED,
+  APPROVAL_GRANTED,
+  APPROVAL_REQUESTED,
+} from './approval-types.js';
 export { loadOrCreateDoorKey, doorKeyFromPem, generateDoorKeyPem } from './door-key.js';
 export type { DoorKey } from './door-key.js';
 export {
   AGENT_REVOKE,
   AGENT_REINSTATE,
+  SUBJECT_REGISTER,
   agentSubject,
   doorSubject,
   mandateSubject,

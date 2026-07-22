@@ -29,6 +29,7 @@
   },
   "dependencies": {
     "@mandarelabs/ledger": "workspace:*",
+    "@mandarelabs/passport": "workspace:*",
     "@sinclair/typebox": "^0.34.0",
     "@mandarelabs/policy-engine": "workspace:*",
     "@mandarelabs/spec": "workspace:*",

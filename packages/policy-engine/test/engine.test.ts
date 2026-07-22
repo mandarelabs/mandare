@@ -230,10 +230,25 @@ describe('MandatePolicyEngine — SPEC §5 order', () => {
     expect(decision.code).toBe('COUNTERPARTY_UNVERIFIABLE');
   });
 
-  test('6. above the approval threshold denies until push approvals land (fail-closed)', async () => {
+  test('6. above the approval threshold denies with APPROVAL_REQUIRED (the gateway holds & pushes)', async () => {
     const decision = await engine().evaluate(request({ estimateMicros: 4_000_001 }));
     expect(decision.code).toBe('APPROVAL_REQUIRED');
-    expect(decision.reasons[0]).toContain('S4');
+    expect(decision.reasons[0]).toContain('approval');
+  });
+
+  test('6c. a recorded approval grant waives the threshold for that evaluation only', async () => {
+    const contextWithGrant = (grant: string) => ({
+      estimateMicros: 4_000_001,
+      currency: 'EUR',
+      counterparty: 'api.anthropic.com',
+      counters: counters(),
+      approvedEntryHash: grant,
+    });
+    const approved = await engine().evaluate(request({ context: contextWithGrant('a'.repeat(64)) }));
+    expect(approved.decision).toBe('allow');
+    // Garbage in the grant field is a malformed context, not a bypass (R4).
+    const forged = await engine().evaluate(request({ context: contextWithGrant('not-a-hash') }));
+    expect(forged.code).toBe('CONTEXT_INVALID');
   });
 
   test('6b. approval rule in a foreign currency denies as unevaluable (fail-closed)', async () => {

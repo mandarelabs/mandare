@@ -17,6 +17,7 @@
     "smoke": "node scripts/smoke.mjs",
     "demo": "node scripts/demo-runaway.mjs",
     "demo:dead-paper": "node scripts/demo-dead-paper.mjs",
+    "demo:mandate": "node scripts/demo-mandate.mjs",
     "live-smoke": "node scripts/live-smoke.mjs",
     "provisioning-smoke": "node scripts/provisioning-smoke.mjs"
   },

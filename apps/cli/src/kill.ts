@@ -3,6 +3,7 @@ import {
   AGENT_REVOKE,
   agentSubject,
   doorSubject,
+  mandateSubject,
   revocationProjector,
 } from '@mandarelabs/ledger';
 import { canonicalJson, sha256Hex } from '@mandarelabs/spec';
@@ -24,6 +25,8 @@ import { closeDoorContext, openDoorContext, type DoorContext } from './door-cont
 export interface KillOptions {
   agent?: string;
   all?: boolean;
+  /** Revoke a MANDATE (S4): the permission slip dies, the agent survives. */
+  mandate?: string;
   reason?: string;
 }
 
@@ -31,26 +34,39 @@ export async function runKill(
   env: Record<string, string | undefined>,
   options: KillOptions
 ): Promise<number> {
-  if (options.all !== true && (options.agent === undefined || options.agent === '')) {
-    process.stderr.write('error: kill requires <agent> (or --all)\n');
+  const killsMandate = options.mandate !== undefined && options.mandate !== '';
+  if (options.all !== true && !killsMandate && (options.agent === undefined || options.agent === '')) {
+    process.stderr.write('error: kill requires <agent>, --mandate <id>, or --all\n');
     return 2;
   }
   const ctx = await openDoorContext(env);
   try {
-    const subject = options.all === true ? doorSubject(ctx.doorId) : agentSubject(options.agent as string);
+    const subject =
+      options.all === true
+        ? doorSubject(ctx.doorId)
+        : killsMandate
+          ? mandateSubject(options.mandate as string)
+          : agentSubject(options.agent as string);
     const entry = await appendRevocation(ctx, AGENT_REVOKE, subject, options.reason);
     // Belt-and-suspenders: the vault stops honoring the actor's tokens too. In
     // legacy mode there is no vault (and no scoped tokens), so this is a no-op
-    // and the ledger revoke alone is the authority.
+    // and the ledger revoke alone is the authority. A mandate kill revokes no
+    // tokens: the AGENT keeps its identity; only this permission slip dies.
     const tokensRevoked =
-      ctx.vault === null
+      ctx.vault === null || killsMandate
         ? null
         : options.all === true
           ? ctx.vault.revokeAllTokens()
           : ctx.vault.revokeActorTokens(options.agent as string);
 
     process.stdout.write(
-      `KILLED ${options.all === true ? `door ${ctx.doorId} (kill --all)` : (options.agent as string)}\n`
+      `KILLED ${
+        options.all === true
+          ? `door ${ctx.doorId} (kill --all)`
+          : killsMandate
+            ? `mandate ${options.mandate as string}`
+            : (options.agent as string)
+      }\n`
     );
     process.stdout.write(`  subject:      ${subject}\n`);
     process.stdout.write(`  ledger entry: ${entry.entry_hash} (seq ${entry.seq})\n`);
@@ -58,7 +74,13 @@ export async function runKill(
       `  door key:     ${ctx.ledger.doorKeyId.slice(0, 12)}… (provenance: ${ctx.ledger.doorKeyProvenance})\n`
     );
     process.stdout.write(
-      `  vault:        ${tokensRevoked === null ? 'legacy mode (no scoped tokens)' : `${tokensRevoked} live token(s) revoked`}\n`
+      `  vault:        ${
+        killsMandate
+          ? 'untouched (mandate kill — the agent keeps its identity, only this permission slip dies)'
+          : tokensRevoked === null
+            ? 'legacy mode (no scoped tokens)'
+            : `${tokensRevoked} live token(s) revoked`
+      }\n`
     );
     if (options.reason !== undefined) {
       process.stdout.write(`  reason:       ${options.reason} (committed in the entry's request_hash)\n`);
