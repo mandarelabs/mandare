@@ -1,7 +1,9 @@
+import { CardRegistry, StripeClient } from '@mandarelabs/card-rail';
 import {
   AGENT_REINSTATE,
   AGENT_REVOKE,
   agentSubject,
+  cardSubject,
   doorSubject,
   mandateSubject,
   revocationProjector,
@@ -85,12 +87,74 @@ export async function runKill(
     if (options.reason !== undefined) {
       process.stdout.write(`  reason:       ${options.reason} (committed in the entry's request_hash)\n`);
     }
+
+    // Card rail (S5): a kill extends to the subject's virtual cards. The
+    // LOCAL authority is the card revocation entry — the door's webhook
+    // declines every later authorization offline. Canceling the card AT
+    // Stripe is belt-and-suspenders, exactly like the OpenRouter disableKey.
+    await killBoundCards(ctx, env, options);
+
     process.stdout.write(
       '  status:       written to the LOCAL ledger — the gateway fails closed on its next request (offline, un-jammable)\n'
     );
     return 0;
   } finally {
     await closeDoorContext(ctx);
+  }
+}
+
+async function killBoundCards(
+  ctx: DoorContext,
+  env: Record<string, string | undefined>,
+  options: KillOptions
+): Promise<void> {
+  const entries = await ctx.ledger.runProjection((tx) => tx.readAllEntries());
+  const registry = CardRegistry.fromEntries(entries);
+  const bound =
+    options.all === true
+      ? registry.list()
+      : options.mandate !== undefined && options.mandate !== ''
+        ? registry.list({ mandateId: options.mandate })
+        : registry.list({ actor: options.agent as string });
+  if (bound.length === 0) {
+    return;
+  }
+  // Belt: cancel at Stripe too, when a key is reachable (vault first, env
+  // fallback). Its absence never blocks the kill — the ledger revoke is the
+  // authority and the webhook declines without any network.
+  const stripeKey = ctx.vault?.getProviderKey('stripe') ?? env.STRIPE_SECRET_KEY ?? null;
+  const stripe =
+    stripeKey === null
+      ? null
+      : new StripeClient({
+          secretKey: stripeKey,
+          ...(env.STRIPE_API_BASE === undefined ? {} : { baseUrl: env.STRIPE_API_BASE }),
+          ...(env.STRIPE_API_VERSION === undefined ? {} : { apiVersion: env.STRIPE_API_VERSION }),
+        });
+  for (const binding of bound) {
+    const subject = cardSubject(binding.cardId);
+    const alreadyRevoked = await ctx.ledger.runProjection(
+      async (tx) => (await tx.getRevocation(subject))?.revoked === true
+    );
+    if (!alreadyRevoked) {
+      const entry = await appendRevocation(ctx, AGENT_REVOKE, subject, options.reason);
+      process.stdout.write(`  card killed:  ${binding.cardId} (entry seq ${entry.seq})\n`);
+    }
+    if (stripe !== null) {
+      try {
+        await stripe.cancelCard(binding.cardId);
+        process.stdout.write(`                canceled at Stripe (belt-and-suspenders)\n`);
+      } catch {
+        process.stdout.write(
+          `                WARNING: Stripe cancel failed — the LOCAL revoke still declines every authorization\n`
+        );
+      }
+    }
+  }
+  if (stripe === null) {
+    process.stdout.write(
+      '  cards:        no Stripe key reachable — cards revoked locally only (webhook declines them regardless)\n'
+    );
   }
 }
 

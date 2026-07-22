@@ -85,6 +85,17 @@ export function testConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfi
     openai: { baseUrl: 'https://openai.example/v1', apiKey: 'test-key-not-a-secret' },
     openrouter: { baseUrl: 'https://openrouter.example/api/v1', apiKey: 'test-key-not-a-secret' },
     chatProvider: 'openrouter',
+    // Card rail off by default: no webhook secret ⇒ the rail does not mount,
+    // keeping the frozen S2–S4 suites untouched. Card tests opt in.
+    stripe: {
+      apiKey: null,
+      webhookSecret: null,
+      apiBase: 'https://stripe.example',
+      apiVersion: null,
+      cardholderId: null,
+      webhookToleranceSeconds: 300,
+      waiverTtlMs: 600_000,
+    },
     ...overrides,
   };
 }

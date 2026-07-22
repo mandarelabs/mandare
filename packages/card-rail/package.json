@@ -1,7 +1,7 @@
 {
-  "name": "@mandarelabs/gateway",
+  "name": "@mandarelabs/card-rail",
   "version": "0.1.0",
-  "description": "Mandare gateway: local LLM proxy that enforces policy pre-call and writes the ledger before and after every action",
+  "description": "Mandare card rail: Stripe Issuing door — mandate-checked virtual cards and real-time authorization decisions at the network level",
   "license": "AGPL-3.0-only",
   "type": "module",
   "engines": {
@@ -24,21 +24,16 @@
     "typecheck": "tsc -p tsconfig.test.json --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
-    "red-team": "vitest run test/red-team",
-    "start": "node dist/start.js"
+    "red-team": "vitest run test/red-team"
   },
   "dependencies": {
-    "@mandarelabs/card-rail": "workspace:*",
     "@mandarelabs/ledger": "workspace:*",
-    "@mandarelabs/passport": "workspace:*",
     "@mandarelabs/policy-engine": "workspace:*",
     "@mandarelabs/spec": "workspace:*",
-    "@mandarelabs/vault": "workspace:*",
     "@sinclair/typebox": "^0.34.0",
     "fastify": "^5.0.0"
   },
   "devDependencies": {
-    "@mandarelabs/verifier": "workspace:*",
     "vitest": "^3.0.0"
   }
 }

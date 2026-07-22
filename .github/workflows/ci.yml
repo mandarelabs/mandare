@@ -72,3 +72,9 @@ jobs:
       # (approve + deny), the whole sequence proven by `mandare verify`.
       # Mock notifier (file channel), no secrets.
       - run: pnpm demo:mandate
+      # The S5 acceptance demo (R7): the card declines AT THE NETWORK — one
+      # €20 mandate across both rails; LLM spend eats the cap, an in-cap
+      # purchase approves, the next declines via the authorization webhook,
+      # `mandare kill` turns the card to dead plastic. Mock Stripe, REAL
+      # webhook signatures, no secrets.
+      - run: pnpm demo:card

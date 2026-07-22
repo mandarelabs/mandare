@@ -39,9 +39,17 @@ export type PolicyRefusalCode =
 export interface MandatePolicyEngineOptions {
   mandate: MandateV1;
   velocity: VelocityLimit;
+  /**
+   * Which money rail this engine instance guards: 'gateway' (LLM spend, the
+   * default) or 'card' (Stripe Issuing authorizations, S5). The SPEC §5
+   * evaluation order is identical; only the spend-scope selection differs.
+   */
+  rail?: SpendRailName;
   /** Injectable clock for tests; defaults to wall time. */
   clock?: () => Date;
 }
+
+export type SpendRailName = 'gateway' | 'card';
 
 /** The context shape `evaluate` requires (validated at the boundary, R4). */
 export interface SpendEvaluationContext {
@@ -79,11 +87,29 @@ export function spendLimitsFromScope(scope: SpendScope): SpendLimits {
 export function selectGatewaySpendScope(
   mandate: MandateV1
 ): SpendScope | 'none' | 'ambiguous' {
+  return selectRailSpendScope(mandate, 'gateway', 'llm');
+}
+
+/**
+ * Card-rail twin of `selectGatewaySpendScope` (S5): exactly ONE spend scope
+ * must cover the 'card' rail (category 'purchase', or uncategorized). The
+ * same scope may also cover 'gateway' — that is the one-mandate-one-cap
+ * cross-rail case, and both doors then reserve against the same counters.
+ */
+export function selectCardSpendScope(mandate: MandateV1): SpendScope | 'none' | 'ambiguous' {
+  return selectRailSpendScope(mandate, 'card', 'purchase');
+}
+
+function selectRailSpendScope(
+  mandate: MandateV1,
+  rail: SpendRailName,
+  category: string
+): SpendScope | 'none' | 'ambiguous' {
   const matches = mandate.scopes.filter(
     (scope): scope is SpendScope =>
       scope.type === 'spend' &&
-      scope.rails.includes('gateway') &&
-      (scope.categories.length === 0 || scope.categories.includes('llm'))
+      scope.rails.includes(rail) &&
+      (scope.categories.length === 0 || scope.categories.includes(category))
   );
   if (matches.length === 0) {
     return 'none';
@@ -171,11 +197,13 @@ function parseWindowInstant(value: string): number | null {
 export class MandatePolicyEngine implements PolicyEngine {
   private readonly mandate: MandateV1;
   private readonly velocity: VelocityLimit;
+  private readonly rail: SpendRailName;
   private readonly clock: () => Date;
 
   constructor(options: MandatePolicyEngineOptions) {
     this.mandate = options.mandate;
     this.velocity = options.velocity;
+    this.rail = options.rail ?? 'gateway';
     this.clock = options.clock ?? ((): Date => new Date());
   }
 
@@ -229,9 +257,10 @@ export class MandatePolicyEngine implements PolicyEngine {
     if (!actionGranted) {
       return deny('SCOPE_MISMATCH', `no action scope grants '${request.action}'`);
     }
-    const selected = selectGatewaySpendScope(mandate);
+    const selected =
+      this.rail === 'card' ? selectCardSpendScope(mandate) : selectGatewaySpendScope(mandate);
     if (selected === 'none') {
-      return deny('SCOPE_MISMATCH', "no spend scope covers the 'gateway' rail for llm spend");
+      return deny('SCOPE_MISMATCH', `no spend scope covers the '${this.rail}' rail for this spend`);
     }
     if (selected === 'ambiguous') {
       return deny(

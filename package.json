@@ -18,7 +18,9 @@
     "demo": "node scripts/demo-runaway.mjs",
     "demo:dead-paper": "node scripts/demo-dead-paper.mjs",
     "demo:mandate": "node scripts/demo-mandate.mjs",
+    "demo:card": "node scripts/demo-card.mjs",
     "live-smoke": "node scripts/live-smoke.mjs",
+    "card-live-smoke": "node scripts/card-live-smoke.mjs",
     "provisioning-smoke": "node scripts/provisioning-smoke.mjs"
   },
   "devDependencies": {

@@ -31,11 +31,14 @@ import {
 } from '@mandarelabs/ledger';
 import { InMemoryNonceStore, isDidKey, type NonceStore } from '@mandarelabs/passport';
 import {
+  MandatePolicyEngine,
   checkBudgets,
   selectGatewaySpendScope,
   spendLimitsFromScope,
   type PolicyEngine,
 } from '@mandarelabs/policy-engine';
+import { StripeClient, WaiverStore, registerCardRail } from '@mandarelabs/card-rail';
+import type { CardRailStatus, CreateAuthenticator } from '@mandarelabs/card-rail';
 import type { SpendScope } from '@mandarelabs/spec';
 
 import type { GatewayConfig, ProviderEndpoint } from './config.js';
@@ -165,6 +168,8 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
   let halted = false;
   // Last time a kill-refusal was recorded to the ledger (throttle, see above).
   let lastRevokedDeniedAt = 0;
+  // Set when the card rail mounts (populated during plugin registration).
+  let cardRailStatus: CardRailStatus | null = null;
 
   // "If you have a vault, the door authenticates." authMode='token' forces it
   // even without a vault (⇒ every spend request fails closed until one is
@@ -230,7 +235,7 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
       config.openrouter.apiKey !== null);
 
   app.get('/healthz', () => ({
-    ok: !halted,
+    ok: !halted && cardRailStatus?.isHalted() !== true,
     halted,
     door_id: config.doorId,
     mandate_id: mandate?.id ?? null,
@@ -240,6 +245,14 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
       openai: config.openai.apiKey !== null,
       openrouter: config.openrouter.apiKey !== null,
     },
+    card_rail:
+      cardRailStatus === null
+        ? { mounted: false }
+        : {
+            mounted: true,
+            halted: cardRailStatus.isHalted(),
+            registered_cards: cardRailStatus.registeredCards(),
+          },
   }));
 
   // Human decision endpoint — the target of the push's Approve/Deny action
@@ -282,6 +295,121 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
     { schema: { body: anthropicMessagesBodySchema } },
     async (request, reply) => handleLlmCall(anthropicAdapter, config.anthropic, request, reply)
   );
+
+  // Card-creation authentication: the gateway owns the auth modes, so the
+  // card rail borrows them. Same order and checks as the spend routes; the
+  // webhook route never uses this (Stripe is authenticated by signature).
+  const authenticateCreate: CreateAuthenticator = async (requestRaw) => {
+    const request = requestRaw as FastifyRequest;
+    if (passportMode) {
+      if (config.trustedAuthorityDid === null) {
+        return {
+          ok: false,
+          status: 503,
+          body: { error: 'passport auth requires MANDARE_TRUST_AUTHORITY — refusing (fail-closed)' },
+        };
+      }
+      const auth = await authenticatePassportRequest({
+        request,
+        rawBody: rawBodies.get(request) ?? Buffer.alloc(0),
+        trustedAuthorityDid: config.trustedAuthorityDid,
+        nonceStore,
+      });
+      if (!auth.ok) {
+        return {
+          ok: false,
+          status: auth.refusal.status,
+          body: { error: 'passport rejected', code: auth.refusal.code },
+        };
+      }
+      if (
+        mandate !== null &&
+        isDidKey(mandate.principal) &&
+        auth.passport.ownerDid !== mandate.principal
+      ) {
+        return { ok: false, status: 403, body: { error: 'passport rejected', code: 'OWNER_MISMATCH' } };
+      }
+      if (mandate !== null && auth.passport.mandateRef !== null && auth.passport.mandateRef !== mandate.id) {
+        return { ok: false, status: 403, body: { error: 'passport rejected', code: 'MANDATE_MISMATCH' } };
+      }
+      return { ok: true, actor: auth.passport.agentDid };
+    }
+    if (requireToken) {
+      if (vault === undefined) {
+        return {
+          ok: false,
+          status: 503,
+          body: { error: 'token auth required but no vault is configured — refusing (fail-closed)' },
+        };
+      }
+      const claims = extractRequestClaims(request);
+      if (claims === null) {
+        return {
+          ok: false,
+          status: 401,
+          body: { error: 'missing proof-of-possession token headers (x-mandare-token/timestamp/nonce/pop)' },
+        };
+      }
+      const verdict = vault.verifyRequest(claims);
+      if (!verdict.ok) {
+        return { ok: false, status: 401, body: { error: 'token rejected', code: verdict.refusal.code } };
+      }
+      if (verdict.verified.actor !== config.actor || (mandate !== null && verdict.verified.mandateId !== mandate.id)) {
+        return {
+          ok: false,
+          status: 403,
+          body: { error: 'token is scoped to a different actor/mandate than this door' },
+        };
+      }
+      return { ok: true, actor: config.actor };
+    }
+    return { ok: true, actor: config.actor };
+  };
+
+  // Card rail (S5, Q11): mounts IFF a webhook secret AND a mandate exist —
+  // signature verification is mandatory, and a door without a mandate has no
+  // authority to approve anything (fail-closed on both counts). Same door
+  // process, same ledger, same ApprovalService: one mandate, one cap, both
+  // rails, and card approvals decide through the same /approvals endpoint.
+  if (config.stripe.webhookSecret !== null && mandate !== null) {
+    const webhookSecret = config.stripe.webhookSecret;
+    const stripeClient =
+      config.stripe.apiKey === null
+        ? null
+        : new StripeClient({
+            secretKey: config.stripe.apiKey,
+            baseUrl: config.stripe.apiBase,
+            ...(config.stripe.apiVersion === null ? {} : { apiVersion: config.stripe.apiVersion }),
+          });
+    const cardPolicy = new MandatePolicyEngine({
+      mandate,
+      velocity: { maxIntentsPerMinute: config.maxIntentsPerMinute },
+      rail: 'card',
+    });
+    void app.register(async (cardScope) => {
+      cardRailStatus = await registerCardRail(cardScope, {
+        config: {
+          doorId: config.doorId,
+          ledgerCurrency: config.ledgerCurrency,
+          maxIntentsPerMinute: config.maxIntentsPerMinute,
+          maxPendingApprovals: config.maxPendingApprovals,
+          approvalBaseUrl: config.publicBaseUrl ?? `http://127.0.0.1:${config.port}`,
+          webhookSecret,
+          webhookToleranceSeconds: config.stripe.webhookToleranceSeconds,
+          waiverTtlMs: config.stripe.waiverTtlMs,
+          cardholderId: config.stripe.cardholderId,
+        },
+        ledger,
+        policy: cardPolicy,
+        mandate,
+        stripe: stripeClient,
+        approvals,
+        ...(notifier === undefined ? {} : { notifier }),
+        waivers: new WaiverStore(config.stripe.waiverTtlMs),
+        authenticateCreate,
+      });
+    });
+  }
 
   return app;
 

@@ -20,10 +20,12 @@ import {
  * kill switch tells it to stop honoring an actor's tokens.
  */
 
-export type ProviderName = 'anthropic' | 'openai' | 'openrouter';
+export type ProviderName = 'anthropic' | 'openai' | 'openrouter' | 'stripe';
 
 // Stable account keys into the encrypted store.
 const PROVISIONING_ACCOUNT = 'provisioning:openrouter';
+/** Stripe webhook signing secret (S5 card rail) — verification key, not an API key. */
+const STRIPE_WEBHOOK_ACCOUNT = 'webhook:stripe';
 
 export function providerAccount(name: ProviderName): string {
   return `provider:${name}`;
@@ -38,6 +40,8 @@ const ENV_KEY_ACCOUNTS: { env: string; account: string }[] = [
   { env: 'ANTHROPIC_API_KEY', account: providerAccount('anthropic') },
   { env: 'OPENAI_API_KEY', account: providerAccount('openai') },
   { env: 'OPENROUTER_API_KEY', account: providerAccount('openrouter') },
+  { env: 'STRIPE_SECRET_KEY', account: providerAccount('stripe') },
+  { env: 'STRIPE_WEBHOOK_SECRET', account: STRIPE_WEBHOOK_ACCOUNT },
   { env: 'OPENROUTER_PROVISIONING_KEY', account: PROVISIONING_ACCOUNT },
 ];
 
@@ -101,6 +105,14 @@ export class Vault {
 
   putProvisioningKey(value: string): void {
     this.secrets.set(PROVISIONING_ACCOUNT, value);
+  }
+
+  getStripeWebhookSecret(): string | null {
+    return this.secrets.get(STRIPE_WEBHOOK_ACCOUNT);
+  }
+
+  putStripeWebhookSecret(value: string): void {
+    this.secrets.set(STRIPE_WEBHOOK_ACCOUNT, value);
   }
 
   // --- door signing key -----------------------------------------------------

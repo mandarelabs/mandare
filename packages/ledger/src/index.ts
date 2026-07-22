@@ -39,6 +39,7 @@ export {
   AGENT_REINSTATE,
   SUBJECT_REGISTER,
   agentSubject,
+  cardSubject,
   doorSubject,
   mandateSubject,
   applyRevocationEntry,
@@ -58,11 +59,15 @@ export {
 } from './revocation-ledger.js';
 export type { RevocationVerdict } from './revocation-ledger.js';
 export {
+  CARD_AUTH_DENIED,
+  CARD_AUTH_INTENT,
+  CARD_AUTH_RESULT,
   EMPTY_COUNTER,
   LLM_CALL_DENIED,
   MapCounterKV,
   ProjectionIntegrityError,
   applySpendEntry,
+  cardAuthKey,
   dayBucket,
   dayKey,
   diffProjection,

@@ -49,7 +49,8 @@ an explicit checklist item.
 | `packages/verifier` | Apache-2.0 | Pure `verifyChain` — portable (WebCrypto only), embeddable by parties who distrust us |
 | `packages/ledger` | AGPL-3.0-only | Append-only SQLite store (`node:sqlite`), hash chain, Ed25519 door signing, spend + revocation projections |
 | `packages/vault` | AGPL-3.0-only | Credential door: OS-keychain-backed encrypted store (`@napi-rs/keyring`), PoP scoped tokens, IETF status-list revocation |
-| `packages/gateway` | AGPL-3.0-only | Fastify LLM proxy door: auth → kill check → policy → intent entry → forward → result entry |
+| `packages/gateway` | AGPL-3.0-only | Fastify LLM proxy door: auth → kill check → policy → intent entry → forward → result entry; mounts the card rail |
+| `packages/card-rail` | AGPL-3.0-only | Stripe Issuing door: mandate-checked virtual cards, real-time authorization webhook → approve/decline at the network |
 | `apps/cli` | AGPL-3.0-only | `mandare` binary (`verify`, `kill`, `reinstate`, `token`, `vault`; later `export`) |
 | `scripts/` | — | license-boundary gate, smoke E2E, Claude hooks |
 
@@ -87,10 +88,11 @@ node scripts/check-license-boundaries.mjs
 Required for: any change to `packages/spec` (schema freeze) · payment-rail
 integrations (Stripe webhook flow) · anything reshaping the repo layout.
 
-## Session roadmap (S0–S3 done ⇒ next: S4)
+## Session roadmap (S0–S5 done ⇒ next: S6)
 
 S1 ledger core hardening ✓ → S2 gateway+budgets (Demo: runaway loop dies at €20) ✓
 → S3 vault+kill switch (Demo: stolen token is dead paper) ✓ → S4
-mandates+approvals (SD-JWT transport, passport identity, CIBA push) → S5 card
-rail → S6 witness+anchoring (publishes the S3 revocation status list) → S7
+mandates+approvals (SD-JWT transport, passport identity, CIBA push) ✓ → S5 card
+rail (Demo: the card declines at the network) ✓ → S6 witness+anchoring
+(publishes the S3 revocation status list; closes the truncation boundary) → S7
 packaging/MCP/skill → S8 review → S9 launch prep.

@@ -24,6 +24,19 @@ import { LLM_CALL_INTENT, LLM_CALL_RESULT, type LedgerEntryV1 } from '@mandarela
 /** Refused reservations are ledger entries too — audit trail includes the no. */
 export const LLM_CALL_DENIED = 'llm.call.denied';
 
+/**
+ * Card rail (S5): a network authorization request is the INTENT (reserving
+ * the requested amount under the same append lock as LLM spend — one
+ * mandate, one cap, both rails), the door's approve decision is the RESULT
+ * (settling the approved amount), and a decline is a DENIED entry with zero
+ * counter effect. `action.target` on card auth entries is the Stripe
+ * authorization id, which doubles as the replay guard: one reservation per
+ * authorization, ever.
+ */
+export const CARD_AUTH_INTENT = 'card.auth.intent';
+export const CARD_AUTH_RESULT = 'card.auth.result';
+export const CARD_AUTH_DENIED = 'card.auth.denied';
+
 export interface SpendCounter {
   reservedMicros: number;
   settledMicros: number;
@@ -66,6 +79,7 @@ export class ProjectionIntegrityError extends Error {
 }
 
 const KEY_PREFIX_INTENT = 'intent:';
+const KEY_PREFIX_CARD_AUTH = 'cardauth:';
 
 function encode(part: string): string {
   return encodeURIComponent(part);
@@ -96,6 +110,16 @@ export function minuteKey(actor: string, ts: string): string {
 /** Per-intent marker row: open reservation amount + double-settle guard. */
 export function intentKey(entryHash: string): string {
   return `${KEY_PREFIX_INTENT}${entryHash}`;
+}
+
+/**
+ * Per-authorization single-use marker (card rail): written when a card
+ * intent is applied, so a replayed authorization webhook can never reserve
+ * twice — live appends refuse it in the projector, and a tampered chain
+ * carrying two intents for one authorization explodes on replay.
+ */
+export function cardAuthKey(authorizationId: string): string {
+  return `${KEY_PREFIX_CARD_AUTH}${encode(authorizationId)}`;
 }
 
 async function readCounter(kv: CounterKV, key: string): Promise<SpendCounter> {
@@ -140,6 +164,22 @@ async function applyIntent(kv: CounterKV, entry: LedgerEntryV1): Promise<void> {
     settledMicros: 0,
     intents: 0,
   });
+  if (entry.action.type === CARD_AUTH_INTENT) {
+    // One reservation per network authorization, ever. The live projector
+    // refuses a duplicate gracefully; a chain that somehow carries two
+    // intents for one authorization is corrupt and must explode on replay.
+    const authMarker = await kv.getCounter(cardAuthKey(entry.action.target));
+    if (authMarker !== null) {
+      throw new ProjectionIntegrityError(
+        `card authorization ${entry.action.target} already has a reservation — duplicate intent (projection corrupt)`
+      );
+    }
+    await kv.putCounter(cardAuthKey(entry.action.target), {
+      reservedMicros: 0,
+      settledMicros: 0,
+      intents: 1,
+    });
+  }
 }
 
 async function applyResult(kv: CounterKV, entry: LedgerEntryV1): Promise<void> {
@@ -189,9 +229,10 @@ async function applyResult(kv: CounterKV, entry: LedgerEntryV1): Promise<void> {
  * denied entries deliberately have no effect.
  */
 export async function applySpendEntry(kv: CounterKV, entry: LedgerEntryV1): Promise<void> {
-  if (entry.action.type === LLM_CALL_INTENT) {
+  const type = entry.action.type;
+  if (type === LLM_CALL_INTENT || type === CARD_AUTH_INTENT) {
     await applyIntent(kv, entry);
-  } else if (entry.action.type === LLM_CALL_RESULT) {
+  } else if (type === LLM_CALL_RESULT || type === CARD_AUTH_RESULT) {
     await applyResult(kv, entry);
   }
 }
@@ -205,7 +246,21 @@ export async function applySpendEntry(kv: CounterKV, entry: LedgerEntryV1): Prom
  */
 export function spendProjector(guard?: SpendGuard) {
   return async (kv: CounterKV, entry: LedgerEntryV1): Promise<ProjectionRefusal | null> => {
-    if (guard !== undefined && entry.action.type === LLM_CALL_INTENT) {
+    const isIntent =
+      entry.action.type === LLM_CALL_INTENT || entry.action.type === CARD_AUTH_INTENT;
+    if (entry.action.type === CARD_AUTH_INTENT) {
+      // Replay guard runs UNDER the append lock: a second webhook for the
+      // same authorization id (Stripe redelivery or an attacker replay) is
+      // refused gracefully here, never reserving twice.
+      const authMarker = await kv.getCounter(cardAuthKey(entry.action.target));
+      if (authMarker !== null) {
+        return {
+          code: 'AUTH_REPLAYED',
+          reason: `card authorization ${entry.action.target} was already decided — refusing a second reservation`,
+        };
+      }
+    }
+    if (guard !== undefined && isIntent) {
       const view: SpendGuardView = {
         estimateMicros: entry.cost.amount,
         currency: entry.cost.currency,

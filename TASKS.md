@@ -772,7 +772,276 @@ boundary. Fixed same-session with regression/red-team tests:
 
 ---
 
-## → S5 handoff (money rails + registry, or witness — founder's call)
+## S5 — Card rail (2026-07-22)
+
+**Scope (per S4 handoff + founder pick):** Stripe Issuing card rail (Q11/Q12) —
+per-agent single-use virtual cards created only under a valid mandate ·
+real-time `issuing_authorization.request` → policy decision (approve/decline/
+partial) well under the 2s budget, webhook-signature verification mandatory ·
+log-before-act adapted to cards · card spend settles into the SAME projection
+as LLM spend (one mandate, one cap, both rails) · kill extends to cards ·
+over-threshold reuses the S4 approval push · Demo 4 "the card declines at the
+network" as a CI acceptance test · red-team additions. (Root CLAUDE.md's
+plan-mode trigger for payment rails: the founder's S5 brief was the approved
+plan — scope executed as specified, latitude decisions below.)
+
+**Status: complete except the live smoke, which is BLOCKED ON the founder**
+(one dashboard click — see "From the founder" below). CI green locally on the
+full gate (build/typecheck/lint+license/test/red-team/smoke/demo×4); Demo 4
+scripted + captured + in CI; Code Reviewer pass done (1 MEDIUM + 5 LOW, all
+actionable ones fixed same session); decision path benchmarked p50 ~0.6–0.9ms /
+p99 ~6–7ms over 200 authorizations (~300× under Stripe's 2s). S0–S4 red-team
+floor and Demos 1–3 frozen and green. Test totals: 55 card-rail tests
+(15 red-team) + the cross-rail gateway mount test on top of the S4 totals.
+
+### Done
+
+- **`packages/card-rail`** (AGPL) — the Stripe Issuing door, mounted ONTO the
+  gateway's Fastify app: one door process, one door key, one ledger. This is
+  forced by S1's one-writing-door-per-DB rule and is what makes the cross-rail
+  cap real (both rails reserve inside the same append transaction). Rail
+  mounts IFF `STRIPE_WEBHOOK_SECRET` AND a mandate exist (fail-closed on both).
+  - `webhook-signature.ts`: HAND-ROLLED Stripe-Signature verification (HMAC v1
+    scheme over exact raw bytes via an encapsulated raw-body parser scope,
+    constant-time compare on pre-validated 64-hex candidates, two-sided
+    timestamp tolerance, rotation multi-v1, duplicate-`t` refused). Forged/
+    unsigned/tampered webhooks: 4xx and ZERO ledger writes.
+  - `routes.ts` decision path: signature → card→(actor,mandate) binding
+    (unknown/cross-mandate card ⇒ decline) → EARLY replay check → revocation
+    (door/agent/mandate/CARD from the LOCAL projection — `mandare kill` from
+    another process bites on the next authorization) → currency sanity
+    (two-decimal allowlist, == ledger currency, no invented FX) → policy
+    (SPEC §5 via `MandatePolicyEngine` with the new `rail: 'card'` option) →
+    RESERVE `card.auth.intent` budget-guarded in the append transaction →
+    SETTLE `card.auth.result` BEFORE Stripe hears "approved" → respond.
+    Unpersistable result ⇒ the card door HALTS and declines everything
+    (surfaced on /healthz `card_rail.halted`).
+  - **Partial approvals** (Q11): budget-cap refusals on
+    `is_amount_controllable` requests approve the largest amount that fits
+    (floored to whole minor units) — only after the FULL policy order allows
+    the reduced amount. Partials NEVER apply to approval thresholds (that
+    would dodge the human).
+  - **Step-up approvals**: 2s cannot hold a human, so over-threshold =
+    DECLINE NOW + the S4 push (same ApprovalService instance, same
+    `/approvals/:id` endpoint — one approval surface, two rails). A recorded
+    `approval.granted` entry mints a SINGLE-USE in-memory waiver
+    (card+merchant+amount-ceiling+TTL); the human just retries the purchase.
+    No entry ⇒ no waiver; unidentifiable merchant ⇒ no waiver (fail-closed).
+  - **Card creation** = a mandate-checked, ledger-logged door op:
+    window + `card.create` action scope + identity + card spend scope checks →
+    `card.create.intent` → Stripe create (virtual, with a Stripe-side
+    per-authorization spending limit = the per-tx cap, belt only) →
+    `card.create.result` (+ `subject.register` for the card's status-list
+    slot at birth) — or `card.create.failed` settling the intent honestly.
+    Response carries id + last4, NEVER a PAN (R2). Auth for the route is the
+    gateway's own mode machinery (an `authenticateCreate` closure: none/
+    token/passport).
+- **`packages/ledger`**: `card.auth.intent/result/denied` project into the
+  SAME `budget_counters` keys as LLM spend — no new tables in either driver.
+  The auth entry's `target` (Stripe authorization id) doubles as a
+  projection-enforced single-use marker (`cardauth:` rows): live appends
+  refuse a duplicate under the lock (`AUTH_REPLAYED`), replay of a tampered
+  chain carrying two intents for one authorization throws
+  `ProjectionIntegrityError`. `cardSubject()` joins the one revocation
+  vocabulary.
+- **`packages/policy-engine`**: `rail?: 'gateway' | 'card'` option +
+  `selectCardSpendScope` (rails includes 'card', category 'purchase' or
+  uncategorized) — SPEC §5 order shared verbatim across rails.
+- **`packages/vault` / gateway config**: `provider:stripe` + `webhook:stripe`
+  slots; `vault import-env` recognizes `STRIPE_SECRET_KEY` /
+  `STRIPE_WEBHOOK_SECRET`; vault mode sources both from the vault (env
+  ignored, said out loud at startup).
+- **`apps/cli`**: `mandare kill` fans out to the subject's cards — revoke
+  entry per card (LOCAL authority; the webhook declines offline) + best-effort
+  Stripe cancel (belt, like OpenRouter disableKey; its absence never blocks
+  the kill). `mandare verify --spend` renders the card trail (CARD reserve/
+  settle/refused lines) and a cross-rail split line ("llm settled X · card
+  settled Y · one cap governs both").
+- **Demo 4** (`scripts/demo-card.mjs`, `pnpm demo:card`, CI job): one €20
+  mandate, both rails — 6 LLM calls settle €15.00 (mock OpenRouter,
+  authoritative usage.cost), a €4.20 purchase APPROVES at the network
+  (real signed webhook against the mounted rail), the next €3.00 DECLINES at
+  the network with the refusal on the ledger, `mandare kill` revokes the card
+  locally AND cancels it at (mock-)Stripe, a post-kill €0.50 declines, and
+  `mandare verify --spend` proves chain VALID + counters == replay + the
+  cross-rail totals (15.00 + 4.20 = 19.20 of 20). ASSERTS everything (R7).
+  Capture: `docs/demos/S5-card-demo.txt`.
+- **Red-team additions** (`packages/card-rail/test/red-team/`, in
+  `pnpm red-team`): unsigned/forged/tampered webhook (zero writes) · replayed
+  webhook — exactly one reservation ever, AND the budget-shifted replay of a
+  decided authorization writes nothing · stale-timestamp replay · spliced
+  duplicate-intent chain explodes on replay · revoked agent/mandate/card/door
+  each decline with the refusal recorded · 20-way race against one cap admits
+  EXACTLY 3×€6 (S2 reserve semantics) · cross-mandate card declined ·
+  gateway-only mandate declines the whole rail · signed request event without
+  `pending_request` declines (never full-approves).
+- **Bench** (`test/decision-latency.test.ts`, runs in CI): 200 sequential
+  authorization decisions through the full route — p50 0.61–0.92ms, p99
+  6.2–7.1ms on Apple Silicon (assertion: p99 < 500ms for slow CI machines).
+  The path is fully local by design; Q11's 2s budget has ~300× headroom.
+- **Docs**: `docs/CARD-RAIL.md` — architecture, the 2s budget + the operator
+  obligation to set the Stripe dashboard timeout default to DECLINE and
+  monitor `request_history.reason=webhook_timeout` (fail-safe on timeout),
+  step-up flow, threat table (incl. the accepted undecided-replay flavor),
+  Host-allowlist caveat, known gaps. Package CLAUDE.md; root CLAUDE.md repo
+  map + roadmap updated.
+- **Live smoke** (`scripts/card-live-smoke.mjs`, `pnpm card-live-smoke`,
+  local only): real test mode via `stripe listen` (real signatures) + Issuing
+  test-helper authorizations against a door-issued card — approve, decline,
+  kill+cancel, verify. Enforces `sk_test_` keys, never prints secrets.
+  **BLOCKED at the account level**: Stripe answers "Your account is not set
+  up to use Issuing" — the founder must enable Issuing on the test account
+  (see below). The script fails closed with exactly that instruction.
+
+### Decisions (S5 latitude; BUILD-DECISIONS untouched)
+
+1. **The card rail is a plugin on the gateway, not a second door process.**
+   S1 froze one writing door per ledger DB, and a separate process/ledger
+   would fracture the single cap into two truths. One process, one key, one
+   ledger; the rail is an encapsulated Fastify scope with its own raw-body
+   parser (signature needs exact bytes).
+2. **Card entries reuse the S2 spend projection verbatim** — intents reserve,
+   results settle, denied entries are counter-inert; day/total keys are the
+   same rows LLM spend uses, which IS the one-cap property. The only new
+   projection state is the `cardauth:` single-use marker (a counter row, so
+   replay(ledger) == counters covers it and no driver schema changed).
+3. **Authorization ≈ spend, settled at decision time (conservative).** v0
+   settles the approved amount when it approves; the capture-time true-up
+   from `issuing_transaction.created` (partial captures, reversals) is
+   scheduled work via Storno corrections. Authorized ≥ captured, so the cap
+   never under-counts (R1).
+4. **Step-up = decline-now + waiver-on-recorded-approval.** Stripe's 2s
+   budget cannot hold a CIBA push, so the approve is asynchronous and the
+   RETRY redeems it: single-use, card+merchant-bound, amount-ceilinged,
+   TTL'd, minted only from a persisted approval.granted entry. In-memory by
+   design (restart ⇒ decline again ⇒ new push; fail-closed).
+5. **Hand-rolled webhook signature verification** (like RFC 6962/did:key):
+   the scheme is ~60 lines with a complete adversarial test surface; zero new
+   dependencies beats auditing the whole stripe SDK for one HMAC. The API
+   client is likewise a minimal fetch/form-encoding wrapper over the four
+   Issuing calls the door needs.
+6. **Two-decimal currencies only** on the card rail in v0 — a zero-decimal
+   currency (JPY) mis-metered 100× is a silent cap bypass; unsupported minor
+   units decline (fail-closed).
+7. **Unknown cards decline but are recorded** (`mnd_unknown`): a validly
+   signed authorization for a card the door never issued is a real event on
+   OUR Stripe account — evidence, not noise.
+
+### Deviations from BUILD-DECISIONS
+
+None. (Q11 followed: webhook decisioning within 2s, `{"approved":bool}` +
+Stripe-Version echo, partial-amount support, `stripe trigger`/test-helper
+testing path, `webhook_timeout` monitoring documented. Q12's Weavr fallback
+untouched — Stripe test mode needs nothing but the Issuing toggle.)
+
+### Review pass (Code Reviewer subagent, full S5 diff)
+
+No CRITICAL/HIGH. 1 MEDIUM + 5 LOW. Explicitly confirmed clean: signature
+crypto (equal-length constant-time, exact-byte binding, parser encapsulation),
+the projection invariant on every path incl. halt-with-open-reservation,
+waiver lifecycle (no mint without a persisted grant, no interleaving window),
+cross-rail race safety (both rails serialize through the same store's
+append transaction), R2/R3 everywhere, kill fan-out. Fixed same session with
+regression/red-team tests:
+
+- **(MEDIUM)** `parseAuthorizationEvent` fell back from `pending_request.amount`
+  to the top-level `amount` — which is 0 on request events, so an API-shape
+  surprise could approve the FULL amount while metering €0 (a `{approved:true}`
+  with no `amount` field approves everything). Now: no `pending_request`, no
+  parse — decline. Red-team case added.
+- **(LOW-1)** replays were only refused at the reserve step, so a replay of a
+  DECIDED authorization after the budget shifted would write a contradictory
+  DENIED entry. An early marker check now declines any decided authorization
+  with zero writes in every budget state; the undecided (step-up) replay
+  flavor is inherent (indistinguishable from a genuine retry), bounded, and
+  documented in the threat table. Red-team case added.
+- **(LOW-2)** merchants with neither network_id nor name pooled under one
+  sentinel waiver key — a waiver for merchant A could match merchant B.
+  Unidentifiable merchants now get no waiver in either direction.
+- **(LOW-3)** the gateway Host allowlist silently applies to /stripe/webhook —
+  documented (production hostname must be allowlisted or the rail 403s into
+  the dashboard timeout default; fail-closed but a silent outage).
+- **(LOW-4)** the card door's halt was invisible — /healthz now reports
+  `card_rail: {mounted, halted, registered_cards}`.
+- **(LOW-5)** vault mode silently ignored env STRIPE_* — startup banner now
+  says so explicitly.
+
+### Known debt (intentional, scheduled)
+
+- **Settlement true-up from `issuing_transaction.created`** (captures,
+  partial reversals) — conservative authorized-amount settlement until then;
+  reconcile via Storno corrections (S6+ or a later pass).
+- Webhook-timeout declines happen at Stripe without the door seeing them —
+  not ledger entries; reconciliation against Stripe's authorization list is
+  a documented manual step until the true-up lands.
+- Waivers + pending approvals in-memory (restart ⇒ re-decline + re-push;
+  fail-closed) — persistence is a nicety, same S4 posture.
+- The card registry learns out-of-process creations only on restart (their
+  authorizations decline until then — fail-closed).
+- A post-kill authorization decided while another process holds the SQLite
+  write lock can wait up to busy_timeout — observed ~2s once in Demo 4
+  (kill CLI + door on one DB); bounded and rare, but worth an eye when the
+  witness (S6) adds more writers.
+- Live smoke blocked on the founder's Issuing toggle (below).
+
+---
+
+## → S6 handoff (witnessing + anchoring)
+
+Read SPEC §6 (witnessing = lock 4/5), the S1 key-directory design
+(docs/KEY-DIRECTORY.md), and the S3 founder ruling (witness = ADDITIONAL
+remote channel, never the authority, never a dependency). S6 closes the
+oldest open boundary in the stack:
+
+1. **The truncation boundary documented since S0 is what S6 closes.** A
+   local attacker who truncates the ledger (or restores an older copy) is
+   invisible to self-anchored verification; since S1 `mandare verify` prints
+   the RFC 6962 tree head and `--prev-head` detects rollback ONLY if someone
+   recorded the head elsewhere. S6 automates exactly that: a witness that
+   records heads off-machine (periodic + on-demand), serves consistency
+   proofs, and gives `verify` a default `--prev-head` source. One red-team
+   todo has waited for this since S0 (`test/red-team/tamper.test.ts`).
+2. **S3's revocation records are already shaped for S6 publishing**: the
+   IETF Token Status List bitstring `mandare verify` renders
+   (`vault/status-list.ts`) is the publishable artifact — S6 hosts it
+   (agent + door + mandate + CARD subjects all share it) and adds the
+   remote kill-trigger / fleet fan-out channel on top. Publishing changes
+   NOTHING about S3 semantics — that was the design obligation, honor it.
+3. **The S1 key directory wants hosting** (`/.well-known/
+   http-message-signatures-directory` serving with correct content-type) —
+   same service, closes the "directory serving is tooling output only" debt.
+4. Card-rail notes for S6: webhook-timeout declines happen outside the
+   ledger — a witness that also ingests Stripe's authorization list would
+   close that reconciliation gap (optional, stretch). The `card.auth.*`
+   entries verify like everything else; nothing card-specific blocks
+   witnessing.
+5. Keep BOTH red-team drivers green (now includes the S5 card suites). The
+   witness is a NEW trust surface: red-team it (lying witness, stale head,
+   split view) and keep the local-authority invariant — a dead witness must
+   never close the door or block a kill.
+
+**From the founder — needed for S5 completion + S6 (decisions, not blocking S6 start):**
+
+- **Enable Issuing on the Stripe TEST account** (one dashboard visit:
+  https://dashboard.stripe.com/issuing/overview → get started, test mode is
+  self-serve). Then run `pnpm card-live-smoke` — everything else is ready
+  and the script walks the whole flow (listen → issue → approve → decline →
+  kill/cancel → verify). Until then the live-smoke exit criterion stays
+  open; CI needs nothing.
+- **Set the Issuing webhook timeout default to DECLINE** in the dashboard
+  once real cards exist (docs/CARD-RAIL.md operator obligation #1).
+- **Where should the witness live** (S6): the planned private-repo cloud
+  service vs. a minimal public reference witness in this repo (SPEC §12
+  deployment modes suggest both eventually) — S6 will default to a public
+  minimal witness + the private service consuming the same protocol unless
+  ruled otherwise.
+- Still pending from S3: wiring OpenRouter `disableKey` into `mandare kill`
+  (needs the per-agent key-hash map; the local authority is complete
+  without it).
+
+---
+
+## → S5 handoff (money rails + registry, or witness — founder's call) — ORIGINAL (fulfilled — see the S5 log above)
 
 Read SPEC §7 (money layer: card rail via Stripe Issuing, x402), §8 (registry &
 certification), §6 continued (witnessing = S6), and the S4 decisions above.

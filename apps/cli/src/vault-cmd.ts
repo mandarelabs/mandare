@@ -14,7 +14,7 @@ export function runVaultImportEnv(env: Record<string, string | undefined>): numb
     const imported = vault.importFromEnv(env);
     if (imported.length === 0) {
       process.stdout.write(
-        'no recognized provider keys found in the environment (ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY, OPENROUTER_PROVISIONING_KEY)\n'
+        'no recognized provider keys found in the environment (ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY, OPENROUTER_PROVISIONING_KEY, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET)\n'
       );
       return 0;
     }

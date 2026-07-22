@@ -27,6 +27,14 @@ export type {
 } from './providers/types.js';
 export { SseParser } from './sse.js';
 export type { SseEvent } from './sse.js';
+export { ApprovalService, FileNotifier, NtfyNotifier } from './approvals.js';
+export type {
+  ApprovalOutcome,
+  ApprovalRequestNotification,
+  CreatedApproval,
+  Notifier,
+  PendingApprovalInput,
+} from './approvals.js';
 export {
   OpenRouterProvisioningClient,
   OpenRouterProvisioningError,

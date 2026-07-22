@@ -44,6 +44,10 @@ export function doorSubject(doorId: string): string {
 export function mandateSubject(mandateId: string): string {
   return `mandate:${mandateId}`;
 }
+/** A virtual card (S5): registered at creation, revoked on kill. */
+export function cardSubject(cardId: string): string {
+  return `card:${cardId}`;
+}
 
 /**
  * Apply one entry's revocation effect. Revoke/reinstate reuse a subject's

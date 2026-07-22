@@ -79,6 +79,26 @@ export interface GatewayConfig {
   openrouter: ProviderEndpoint;
   /** Which provider serves /v1/chat/completions. */
   chatProvider: 'openrouter' | 'openai';
+  /**
+   * Card rail (S5, Q11). The rail mounts IFF a webhook secret is present —
+   * signature verification is mandatory, so without the secret there is no
+   * webhook route at all (fail-closed, not fail-open).
+   */
+  stripe: {
+    /** API key for card creation/cancel; null = those ops stay closed. */
+    apiKey: string | null;
+    /** Webhook signing secret; null = the card rail does not mount. */
+    webhookSecret: string | null;
+    /** Injectable base URL: mock server in CI, api.stripe.com live. */
+    apiBase: string;
+    /** Optional pinned Stripe-Version for outbound calls. */
+    apiVersion: string | null;
+    /** Issuing cardholder new cards belong to; null = creation closed. */
+    cardholderId: string | null;
+    webhookToleranceSeconds: number;
+    /** How long a granted step-up waiver stays redeemable (ms). */
+    waiverTtlMs: number;
+  };
 }
 
 const DEFAULT_PORT = 8484;
@@ -86,6 +106,9 @@ const DEFAULT_MAX_INTENTS_PER_MINUTE = 60;
 const DEFAULT_APPROVAL_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_PENDING_APPROVALS = 8;
 const DEFAULT_NTFY_URL = 'https://ntfy.sh';
+const DEFAULT_STRIPE_API_BASE = 'https://api.stripe.com';
+const DEFAULT_WEBHOOK_TOLERANCE_SECONDS = 300;
+const DEFAULT_CARD_WAIVER_TTL_MS = 10 * 60_000;
 
 function stripSlashes(url: string): string {
   return url.replace(/\/+$/, '');
@@ -205,7 +228,38 @@ export function loadConfigFromEnv(env: Record<string, string | undefined>): Gate
       apiKey: openrouterKey,
     },
     chatProvider,
+    stripe: {
+      apiKey: env.STRIPE_SECRET_KEY ?? null,
+      webhookSecret: env.STRIPE_WEBHOOK_SECRET ?? null,
+      apiBase: stripSlashes(env.STRIPE_API_BASE ?? DEFAULT_STRIPE_API_BASE),
+      apiVersion: env.STRIPE_API_VERSION ?? null,
+      cardholderId: env.STRIPE_CARDHOLDER_ID ?? null,
+      webhookToleranceSeconds: parseWebhookTolerance(env.STRIPE_WEBHOOK_TOLERANCE_SECONDS),
+      waiverTtlMs: parseWaiverTtl(env.MANDARE_CARD_WAIVER_TTL_MS),
+    },
   };
+}
+
+function parseWebhookTolerance(raw: string | undefined): number {
+  if (raw === undefined || raw === '') {
+    return DEFAULT_WEBHOOK_TOLERANCE_SECONDS;
+  }
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error('invalid STRIPE_WEBHOOK_TOLERANCE_SECONDS: must be a positive integer');
+  }
+  return value;
+}
+
+function parseWaiverTtl(raw: string | undefined): number {
+  if (raw === undefined || raw === '') {
+    return DEFAULT_CARD_WAIVER_TTL_MS;
+  }
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1_000) {
+    throw new Error('invalid MANDARE_CARD_WAIVER_TTL_MS: must be an integer ≥ 1000');
+  }
+  return value;
 }
 
 /**

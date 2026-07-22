@@ -27,9 +27,11 @@ export {
 export {
   MandatePolicyEngine,
   parseSpendContext,
+  selectCardSpendScope,
   selectGatewaySpendScope,
   spendLimitsFromScope,
   type MandatePolicyEngineOptions,
   type PolicyRefusalCode,
   type SpendEvaluationContext,
+  type SpendRailName,
 } from './engine.js';

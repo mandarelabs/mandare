@@ -1,4 +1,7 @@
 import {
+  CARD_AUTH_DENIED,
+  CARD_AUTH_INTENT,
+  CARD_AUTH_RESULT,
   LLM_CALL_DENIED,
   diffProjection,
   readSpendProjectionSqlite,
@@ -53,9 +56,47 @@ function trailLine(entry: TrailEntry): string {
       return `  #${entry.seq}  ${entry.ts}  RESULT   settle  ${amount}`;
     case LLM_CALL_DENIED:
       return `  #${entry.seq}  ${entry.ts}  DENIED   refused ${amount}  ← reservation REFUSED by policy`;
+    case CARD_AUTH_INTENT:
+      return `  #${entry.seq}  ${entry.ts}  CARD     reserve ${amount}  (network authorization)`;
+    case CARD_AUTH_RESULT:
+      return `  #${entry.seq}  ${entry.ts}  CARD     settle  ${amount}  ← authorization APPROVED`;
+    case CARD_AUTH_DENIED:
+      return `  #${entry.seq}  ${entry.ts}  CARD     refused ${amount}  ← DECLINED at the network`;
     default:
       return `  #${entry.seq}  ${entry.ts}  ${entry.action.type}`;
   }
+}
+
+/** Per-rail settled/refused split — the cross-rail proof Demo 4 asserts. */
+function railSplit(entries: readonly TrailEntry[]): {
+  llmSettled: number;
+  cardSettled: number;
+  llmDenied: number;
+  cardDenied: number;
+} {
+  let llmSettled = 0;
+  let cardSettled = 0;
+  let llmDenied = 0;
+  let cardDenied = 0;
+  for (const entry of entries) {
+    switch (entry.action.type) {
+      case LLM_CALL_RESULT:
+        llmSettled += entry.cost.amount;
+        break;
+      case CARD_AUTH_RESULT:
+        cardSettled += entry.cost.amount;
+        break;
+      case LLM_CALL_DENIED:
+        llmDenied += 1;
+        break;
+      case CARD_AUTH_DENIED:
+        cardDenied += 1;
+        break;
+      default:
+        break;
+    }
+  }
+  return { llmSettled, cardSettled, llmDenied, cardDenied };
 }
 
 export async function buildSpendReport(
@@ -83,7 +124,9 @@ export async function buildSpendReport(
       currency,
     };
   }
-  const deniedCount = typed.filter((entry) => entry.action.type === LLM_CALL_DENIED).length;
+  const deniedCount = typed.filter(
+    (entry) => entry.action.type === LLM_CALL_DENIED || entry.action.type === CARD_AUTH_DENIED
+  ).length;
 
   lines.push('spend:');
   if (Object.keys(mandates).length === 0) {
@@ -94,6 +137,17 @@ export async function buildSpendReport(
       `  ${mandateId}: settled ${formatAmount(totals.settled_micros, totals.currency)}` +
         ` · open reservations ${formatAmount(totals.reserved_micros, totals.currency)}` +
         ` · ${totals.intents} call(s) · ${deniedCount} refused`
+    );
+  }
+  // Cross-rail split (S5): both rails settle into the SAME counters above;
+  // this line shows how the one cap was consumed across them.
+  const rails = railSplit(typed);
+  if (rails.cardSettled > 0 || rails.cardDenied > 0) {
+    const currency = typed.find((entry) => entry.cost.currency !== undefined)?.cost.currency ?? 'EUR';
+    lines.push(
+      `  rails:    llm settled ${formatAmount(rails.llmSettled, currency)} (${rails.llmDenied} refused)` +
+        ` · card settled ${formatAmount(rails.cardSettled, currency)} (${rails.cardDenied} declined)` +
+        ` · one cap governs both`
     );
   }
 

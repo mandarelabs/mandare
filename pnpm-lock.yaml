@@ -29,6 +29,9 @@ importers:
 
   apps/cli:
     dependencies:
+      '@mandarelabs/card-rail':
+        specifier: workspace:*
+        version: link:../../packages/card-rail
       '@mandarelabs/ledger':
         specifier: workspace:*
         version: link:../../packages/ledger
@@ -49,8 +52,33 @@ importers:
         specifier: ^3.0.0
         version: 3.2.7(@types/node@22.20.1)
 
+  packages/card-rail:
+    dependencies:
+      '@mandarelabs/ledger':
+        specifier: workspace:*
+        version: link:../ledger
+      '@mandarelabs/policy-engine':
+        specifier: workspace:*
+        version: link:../policy-engine
+      '@mandarelabs/spec':
+        specifier: workspace:*
+        version: link:../spec
+      '@sinclair/typebox':
+        specifier: ^0.34.0
+        version: 0.34.52
+      fastify:
+        specifier: ^5.0.0
+        version: 5.10.0
+    devDependencies:
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.7(@types/node@22.20.1)
+
   packages/gateway:
     dependencies:
+      '@mandarelabs/card-rail':
+        specifier: workspace:*
+        version: link:../card-rail
       '@mandarelabs/ledger':
         specifier: workspace:*
         version: link:../ledger

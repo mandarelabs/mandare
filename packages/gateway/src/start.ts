@@ -193,6 +193,19 @@ console.log(
     `openai=${config.openai.apiKey === null ? 'absent' : 'present'} ` +
     `openrouter=${config.openrouter.apiKey === null ? 'absent' : 'present'}`
 );
+const cardRailOffReason =
+  useVault && baseConfig.stripe.webhookSecret !== null && config.stripe.webhookSecret === null
+    ? 'off (vault mode ignores env STRIPE_* — run `mandare vault import-env` to move them into the vault)'
+    : 'off (no webhook secret / no mandate)';
+console.log(
+  `  card rail: ${
+    config.stripe.webhookSecret === null || mandate === null
+      ? cardRailOffReason
+      : `ON — webhook decisions live; card creation ${
+          config.stripe.apiKey === null || config.stripe.cardholderId === null ? 'CLOSED (no API key / cardholder)' : 'open'
+        }`
+  }`
+);
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
@@ -208,7 +221,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
 function withVaultProviderKeys(
   base: GatewayConfig,
   v: Vault
-): Pick<GatewayConfig, 'anthropic' | 'openai' | 'openrouter'> {
+): Pick<GatewayConfig, 'anthropic' | 'openai' | 'openrouter' | 'stripe'> {
   const withKey = (endpoint: ProviderEndpoint, key: string | null): ProviderEndpoint => ({
     ...endpoint,
     apiKey: key,
@@ -217,5 +230,10 @@ function withVaultProviderKeys(
     anthropic: withKey(base.anthropic, v.getProviderKey('anthropic')),
     openai: withKey(base.openai, v.getProviderKey('openai')),
     openrouter: withKey(base.openrouter, v.getProviderKey('openrouter')),
+    stripe: {
+      ...base.stripe,
+      apiKey: v.getProviderKey('stripe'),
+      webhookSecret: v.getStripeWebhookSecret(),
+    },
   };
 }

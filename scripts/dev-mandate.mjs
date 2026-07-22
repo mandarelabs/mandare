@@ -52,6 +52,9 @@ if (outPath === null) {
 const agent = arg('agent', 'did:mandare:dev-agent');
 const currency = arg('currency', 'EUR');
 const validHours = Number(arg('valid-hours', '24'));
+// --card: ONE spend scope covering BOTH rails (S5 cross-rail cap) + the
+// card action classes. Default stays gateway-only for the frozen demos.
+const withCard = process.argv.includes('--card');
 
 // Owner key: ephemeral by default; --owner-key <pem> to reuse one.
 const ownerKeyPath = arg('owner-key', null);
@@ -78,11 +81,14 @@ const mandate = {
       per_day_max: unitsToMicros('per-day', 20),
       per_task_max: unitsToMicros('per-task', 20),
       total_cap: unitsToMicros('total', 100),
-      rails: ['gateway'],
+      rails: withCard ? ['gateway', 'card'] : ['gateway'],
       counterparties: 'any',
-      categories: ['llm'],
+      categories: withCard ? [] : ['llm'],
     },
-    { type: 'action', classes: ['llm.call'] },
+    {
+      type: 'action',
+      classes: withCard ? ['llm.call', 'card.purchase', 'card.create'] : ['llm.call'],
+    },
   ],
   approvals: {
     rules: [{ above: unitsToMicros('approval-above', 5), currency, method: 'push' }],
