@@ -786,8 +786,11 @@ plan-mode trigger for payment rails: the founder's S5 brief was the approved
 plan — scope executed as specified, latitude decisions below.)
 
 **Status: complete except the live smoke, which is BLOCKED ON the founder**
-(one dashboard click — see "From the founder" below). CI green locally on the
-full gate (build/typecheck/lint+license/test/red-team/smoke/demo×4); Demo 4
+(one dashboard click — see "From the founder" below). CI green ON ORIGIN
+(run 29932497770, all 4 jobs; the first push tripped a pre-existing 5s vitest
+timeout on the S1 merkle property sweeps under the higher parallel load — a
+budget bump, assertions untouched) and locally on the full gate
+(build/typecheck/lint+license/test/red-team/smoke/demo×4); Demo 4
 scripted + captured + in CI; Code Reviewer pass done (1 MEDIUM + 5 LOW, all
 actionable ones fixed same session); decision path benchmarked p50 ~0.6–0.9ms /
 p99 ~6–7ms over 200 authorizations (~300× under Stripe's 2s). S0–S4 red-team
