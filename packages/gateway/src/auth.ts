@@ -44,6 +44,18 @@ export function buildAllowedHosts(config: GatewayConfig): Set<string> {
   for (const host of config.allowedHosts) {
     hosts.add(host);
   }
+  // The operator-declared public base URL (approval buttons, forwarded
+  // Stripe webhooks) is by definition a name this door expects to be
+  // reached under — allow it automatically, or every webhook behind a real
+  // hostname 403s into the Stripe dashboard timeout default (a silent,
+  // fail-closed outage of the card rail; review S5 LOW-4).
+  if (config.publicBaseUrl !== null) {
+    try {
+      hosts.add(new URL(config.publicBaseUrl).hostname.toLowerCase());
+    } catch {
+      // An unparseable publicBaseUrl adds nothing (fail-closed).
+    }
+  }
   return hosts;
 }
 

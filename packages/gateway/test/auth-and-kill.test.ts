@@ -49,6 +49,27 @@ describe('Host allowlist (DNS-rebinding defense)', () => {
     expect(res.json().error).toContain('host not allowed');
   });
 
+  test('the publicBaseUrl host is auto-allowed (webhooks behind a real hostname)', async () => {
+    tg = await openTestGateway({
+      fetchImpl: openrouterOkFetch(),
+      config: { publicBaseUrl: 'https://door.example.com' },
+    });
+    const allowed = await tg.app.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      headers: { host: 'door.example.com' },
+      payload: chatBody,
+    });
+    expect(allowed.statusCode).not.toBe(403);
+    const foreign = await tg.app.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      headers: { host: 'other.example.com' },
+      payload: chatBody,
+    });
+    expect(foreign.statusCode).toBe(403);
+  });
+
   test('localhost and 127.0.0.1 are always allowed', async () => {
     tg = await openTestGateway({ fetchImpl: openrouterOkFetch() });
     for (const host of ['localhost', '127.0.0.1:8484']) {

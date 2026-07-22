@@ -955,15 +955,20 @@ regression/red-team tests:
 - **(LOW-1)** replays were only refused at the reserve step, so a replay of a
   DECIDED authorization after the budget shifted would write a contradictory
   DENIED entry. An early marker check now declines any decided authorization
-  with zero writes in every budget state; the undecided (step-up) replay
-  flavor is inherent (indistinguishable from a genuine retry), bounded, and
-  documented in the threat table. Red-team case added.
+  with zero writes in every budget state. The undecided (step-up) flavor is
+  bounded by a per-authorization in-flight dedupe: while the human decision
+  is pending, a replay writes nothing, pushes nothing, and cannot create a
+  second waiver path (after resolution, a re-request is indistinguishable
+  from a genuine merchant retry — the human is simply asked again, which is
+  the correct behavior). Red-team cases added for both flavors.
 - **(LOW-2)** merchants with neither network_id nor name pooled under one
   sentinel waiver key — a waiver for merchant A could match merchant B.
   Unidentifiable merchants now get no waiver in either direction.
 - **(LOW-3)** the gateway Host allowlist silently applies to /stripe/webhook —
-  documented (production hostname must be allowlisted or the rail 403s into
-  the dashboard timeout default; fail-closed but a silent outage).
+  the `MANDARE_GATEWAY_PUBLIC_URL` hostname is now auto-allowed (with a
+  regression test), so a deployment behind its declared public name cannot
+  silently 403 its own webhooks; other hostnames still need
+  `MANDARE_GATEWAY_ALLOWED_HOSTS` (documented).
 - **(LOW-4)** the card door's halt was invisible — /healthz now reports
   `card_rail: {mounted, halted, registered_cards}`.
 - **(LOW-5)** vault mode silently ignored env STRIPE_* — startup banner now

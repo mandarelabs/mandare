@@ -73,6 +73,12 @@ export async function registerCardRail(
     CardRegistry.fromEntries(await ledger.runProjection((tx) => tx.readAllEntries()));
   let halted = false;
   let lastRevokedDeniedAt = 0;
+  // Authorization ids with a step-up approval currently in flight: a
+  // replayed webhook for one of these writes NOTHING and pushes nothing —
+  // one authorization, one pending question, one possible waiver (review
+  // S5 LOW-1, the undecided-replay flavor). Entries clear when the human
+  // decides or the approval times out (both paths resolve the outcome).
+  const pendingStepUps = new Set<string>();
 
   const scopeSelection = selectCardSpendScope(mandate);
   const cardScope: SpendScope | null =
@@ -469,6 +475,12 @@ export async function registerCardRail(
     _reply: FastifyReply,
     respond: (approved: boolean) => unknown
   ): unknown {
+    if (pendingStepUps.has(auth.authorizationId)) {
+      // A replay (or double delivery) while the human is already being
+      // asked about THIS authorization: decline silently — no second
+      // denied entry, no second push, no second waiver path.
+      return respond(false);
+    }
     if (auth.merchantKey === null) {
       void recordDenied({
         code: 'APPROVAL_REQUIRED',
@@ -515,9 +527,14 @@ export async function registerCardRail(
       target: auth.authorizationId,
     });
     // Fire-and-forget: the webhook answer must not wait on the push channel.
-    void runStepUpApproval(auth, auth.merchantKey, actor, requestHash).catch(() => {
-      // Fail closed: any error on this path means no waiver is minted.
-    });
+    pendingStepUps.add(auth.authorizationId);
+    void runStepUpApproval(auth, auth.merchantKey, actor, requestHash)
+      .catch(() => {
+        // Fail closed: any error on this path means no waiver is minted.
+      })
+      .finally(() => {
+        pendingStepUps.delete(auth.authorizationId);
+      });
     return respond(false);
   }
 

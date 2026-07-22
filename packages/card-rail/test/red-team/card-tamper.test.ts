@@ -164,6 +164,41 @@ describe('red-team: webhook forgery and replay', () => {
     }
   });
 
+  it('a replay of an UNDECIDED (step-up-held) authorization writes nothing and pushes nothing', async () => {
+    const rail = await openTestRail({ cards: ['ic_1'] });
+    try {
+      // €9 > the €8 threshold → decline + ONE push, approval left pending.
+      const event = authorizationEvent({ authorizationId: 'iauth_pend', cardId: 'ic_1', amountMinorUnits: 900 });
+      const payload = JSON.stringify(event);
+      const header = signStripePayload({ payload, secret: testRailConfig().webhookSecret });
+      const inject = () =>
+        rail.app.inject({
+          method: 'POST',
+          url: '/stripe/webhook',
+          payload,
+          headers: { 'content-type': 'application/json', 'stripe-signature': header },
+        });
+      const first = await inject();
+      expect(JSON.parse(first.body)).toEqual({ approved: false });
+      // Wait for the push, then replay the SAME signed webhook twice.
+      const deadline = Date.now() + 5_000;
+      while (rail.notifier.notifications.length === 0 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      const afterFirst = entryCount(rail.dbPath);
+      for (let i = 0; i < 2; i += 1) {
+        const replay = await inject();
+        expect(JSON.parse(replay.body)).toEqual({ approved: false });
+      }
+      expect(entryCount(rail.dbPath)).toBe(afterFirst); // no extra denied/requested entries
+      expect(rail.notifier.notifications).toHaveLength(1); // ONE push, ever
+      expect(rail.approvals.created).toHaveLength(1); // ONE possible waiver
+      rail.approvals.created[0]?.resolve('denied');
+    } finally {
+      await rail.close();
+    }
+  });
+
   it('a signed request event WITHOUT pending_request is declined, never full-approved (review MEDIUM-1)', async () => {
     const rail = await openTestRail({ cards: ['ic_1'] });
     try {

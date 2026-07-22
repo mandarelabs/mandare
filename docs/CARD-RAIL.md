@@ -80,12 +80,13 @@ vault (`mandare vault import-env` recognizes both) — R2, nothing
 agent-reachable holds them. Env-supplied `STRIPE_*` values are IGNORED in
 vault mode (the startup banner says so).
 
-**Host allowlist caveat:** the gateway's DNS-rebinding Host check applies to
+**Host allowlist:** the gateway's DNS-rebinding Host check applies to
 `/stripe/webhook` too. Local `stripe listen` forwarding (localhost) passes
-by default, but a deployment that receives webhooks on a real hostname must
-add it to `MANDARE_GATEWAY_ALLOWED_HOSTS`, or every webhook 403s and each
-authorization rides the dashboard timeout default (a silent, fail-closed
-outage of the rail — watch `webhook_timeout`).
+by default, and the `MANDARE_GATEWAY_PUBLIC_URL` hostname is allowed
+automatically; any OTHER hostname the door is reached under must be added
+to `MANDARE_GATEWAY_ALLOWED_HOSTS`, or its webhooks 403 and each
+authorization rides the dashboard timeout default (fail-closed, but a
+silent outage of the rail — watch `webhook_timeout`).
 
 The door's `/healthz` reports `card_rail: { mounted, halted,
 registered_cards }`; `halted: true` means a decision could not be recorded
@@ -97,7 +98,7 @@ and the card door is declining everything — investigate before restarting.
 |---|---|---|
 | Forged/unsigned webhook | mandatory HMAC over exact raw bytes, constant-time; 4xx with ZERO ledger writes | red-team `card-tamper` |
 | Replayed webhook of a DECIDED authorization (in-window) | early per-authorization marker check + the in-transaction single-use guard; decline, no writes — in every budget state | red-team |
-| Replayed webhook of an UNDECIDED (step-up-declined) authorization | inherent: indistinguishable from a genuine retry; bounded by the signature gate, the approval-backlog cap, and the single-use waiver | accepted, this table |
+| Replayed webhook of an UNDECIDED (step-up-held) authorization | while the human decision is in flight: per-authorization dedupe — no writes, no second push, no second waiver. After a decision resolves, a re-request is indistinguishable from a genuine merchant retry (the human is simply asked again); bounded by the signature gate, the backlog cap, and the single-use waiver | red-team |
 | Replayed webhook (stale) | signature timestamp tolerance | red-team |
 | Concurrent authorizations racing one cap | reservation under the append lock (S2 semantics) — exact admission count | red-team race (20-way) |
 | Cross-rail overshoot (LLM + card) | both rails reserve in the same counters | gateway `card-rail-mount` test, Demo 4 |
