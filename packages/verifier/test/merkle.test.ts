@@ -181,8 +181,13 @@ describe('consistency proofs (official vectors)', () => {
 
 describe('property sweep: every proof verifies at every size (synthetic 32-byte leaves)', () => {
   const SWEEP_SIZE = 33;
+  // The sweeps are O(n³)-ish WebCrypto work and share a 2-core CI runner
+  // with every other package's tests; the default 5s budget is a load
+  // flake, not a property (first tripped when S5 added a test package to
+  // the parallel set). Generous timeout — the ASSERTIONS are unchanged.
+  const SWEEP_TIMEOUT_MS = 120_000;
 
-  test('all inclusion proofs verify; wrong index/root/proof fail', async () => {
+  test('all inclusion proofs verify; wrong index/root/proof fail', { timeout: SWEEP_TIMEOUT_MS }, async () => {
     const entryHashes = await syntheticLeaves(SWEEP_SIZE);
     for (let size = 1; size <= SWEEP_SIZE; size += 1) {
       const prefix = entryHashes.slice(0, size);
@@ -196,7 +201,7 @@ describe('property sweep: every proof verifies at every size (synthetic 32-byte 
     }
   });
 
-  test('all consistency proofs verify across all size pairs', async () => {
+  test('all consistency proofs verify across all size pairs', { timeout: SWEEP_TIMEOUT_MS }, async () => {
     const entryHashes = await syntheticLeaves(SWEEP_SIZE);
     const roots: string[] = [EMPTY_TREE_ROOT];
     for (let size = 1; size <= SWEEP_SIZE; size += 1) {
