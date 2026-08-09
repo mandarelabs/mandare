@@ -21,7 +21,7 @@ and gated on the external audit — it does not block the launch.
 | G5 | **Author-identity decision** (G-IDENT) — all 37 commits are under the founder's personal account (handle + e-mail); accept (recommended) or rewrite history BEFORE the flip, never after | OPEN (founder) — see SECRET-SCAN-S9.md |
 | G6 | **npm/MCP namespace + Trusted Publishing** (founder to-do F1 below) configured | OPEN |
 | G7 | **Dependency-pin decision** — S7 deferred next 16 / fumadocs 16 / the orama override + files-thunk shim; currently still pinned (`next ~15.5.0`, `fumadocs ^15.8.5`). Decide: ship pinned (fine — lockfile-frozen) and upgrade post-launch, or run the upgrade pass in a session BEFORE the flip. Do NOT upgrade on launch day | OPEN — recommend ship-pinned |
-| G8 | **Release workflow dry-run green** — `gh workflow run release.yml` (publish=false) on origin; gate job must show `publish=false`, all build/sign/pack/hash steps green | armed in S9; run recorded below |
+| G8 | **Release workflow dry-run green** — `gh workflow run release.yml` (publish=false) on origin; gate job must show `publish=false`, all build/sign/pack/hash steps green | **GREEN** — run 31320779975 (2026-08-09): gate `publish=false (repo private=true)`, ephemeral-key sign → pin-verify "skill package VERIFIED", all 4 publish jobs skipped. Re-run at the flip commit |
 
 ## The four founder dashboard to-dos (F1–F4)
 

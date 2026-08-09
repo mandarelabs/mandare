@@ -1563,8 +1563,11 @@ gate · README as the conversion asset (Q29) · `examples/` · the Show HN draft
 
 **Status: complete.** Repo still private, no registry touched. Full local gate
 green (typecheck/lint+license+boundaries/test; Demo 1 re-run green via
-`examples/01`); CI on origin at the end of session. Frozen floor untouched —
-the only code edit this session is one comment line (`apps/cli/src/directory.ts`).
+`examples/01`); **CI green on origin** (run 31320774255) and the **release
+dry-run green** (run 31320779975: gate `publish=false (repo private=true)`,
+ephemeral-key sign → P1 pin-verify "skill package VERIFIED", all four publish
+jobs skipped — G8 validated). Frozen floor untouched — the only code edit this
+session is one comment line (`apps/cli/src/directory.ts`).
 
 ### Done
 
