@@ -75,11 +75,31 @@ describe('card rail — card creation (a mandate-checked, ledger-logged door op)
     });
     const response = await rail.app.inject({ method: 'POST', url: '/cards' });
     expect(response.statusCode).toBe(201);
-    const created = JSON.parse(response.body) as { card_id: string; last4: string };
+    const created = JSON.parse(response.body) as Record<string, unknown> & {
+      card_id: string;
+      last4: string;
+    };
     expect(created.card_id).toBe('ic_mock_1');
     expect(created.last4).toBe('4242');
-    // R2: no PAN anywhere in the response.
-    expect(response.body).not.toMatch(/\d{13,19}/);
+    // R2: no PAN anywhere in the response. Three layers, each preserving the
+    // original intent WITHOUT the false positive a 64-hex entry hash can
+    // trigger (hex occasionally contains 13+ consecutive digits — it did,
+    // once, in CI): (1) the response carries EXACTLY the allowlisted fields,
+    // (2) the two ledger refs are proven to be 64-hex hashes (a PAN cannot
+    // be one), (3) every OTHER byte of the response is PAN-scanned.
+    expect(Object.keys(created).sort()).toEqual([
+      'card_id',
+      'currency',
+      'intent_entry',
+      'last4',
+      'per_authorization_limit_minor_units',
+      'result_entry',
+      'status',
+    ]);
+    expect(created.intent_entry).toMatch(/^[0-9a-f]{64}$/);
+    expect(created.result_entry).toMatch(/^[0-9a-f]{64}$/);
+    const { intent_entry: _intent, result_entry: _result, ...nonHashFields } = created;
+    expect(JSON.stringify(nonHashFields)).not.toMatch(/\d{13,19}/);
 
     const entries = readLedger(rail.dbPath).entries as LedgerEntryV1[];
     const types = entries.map((entry) => entry.action.type);
