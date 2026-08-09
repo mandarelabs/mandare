@@ -1,7 +1,15 @@
 import { describe, expect, test } from 'vitest';
 
-import { CARD_AUTH_INTENT, CARD_AUTH_RESULT, readLedger } from '@mandarelabs/ledger';
-import type { LedgerEntryV1, MandateV1 } from '@mandarelabs/spec';
+import {
+  AGENT_REVOKE,
+  type AsyncLedger,
+  CARD_AUTH_INTENT,
+  CARD_AUTH_RESULT,
+  agentSubject,
+  readLedger,
+  revocationProjector,
+} from '@mandarelabs/ledger';
+import { canonicalJson, sha256Hex, type LedgerEntryV1, type MandateV1 } from '@mandarelabs/spec';
 
 import type { CardWitnessGate } from '../../src/types.js';
 import { authorizationEvent, openTestRail, postWebhook } from '../helpers.js';
@@ -16,6 +24,19 @@ import { authorizationEvent, openTestRail, postWebhook } from '../helpers.js';
 function entriesOfType(dbPath: string, type: string): LedgerEntryV1[] {
   const { entries } = readLedger(dbPath);
   return (entries as LedgerEntryV1[]).filter((entry) => entry.action.type === type);
+}
+
+async function kill(ledger: AsyncLedger, subject: string): Promise<void> {
+  const requestHash = sha256Hex(canonicalJson({ op: AGENT_REVOKE, subject }));
+  await ledger.appendProjected(
+    {
+      actor: 'mandare:operator',
+      mandate_id: 'mandare:kill',
+      action: { type: AGENT_REVOKE, target: subject, request_hash: requestHash },
+      cost: { amount: 0, currency: 'EUR', tokens_in: 0, tokens_out: 0 },
+    },
+    revocationProjector()
+  );
 }
 
 function gateThat(behavior: 'ok' | 'dead' | 'hang-free-decline'): CardWitnessGate & { calls: number } {
@@ -97,6 +118,41 @@ describe('card rail witness-ack gating (lock 5)', () => {
         authorizationEvent({ authorizationId: 'iauth_wg4', cardId: 'ic_wg4', amountMinorUnits: 400 })
       );
       expect((response.json() as { approved: boolean }).approved).toBe(true);
+    } finally {
+      await rail.close();
+    }
+  });
+
+  test('KILL DURING ACK: a kill landing while the gate waits for the ack still declines (S8/S2)', async () => {
+    // Lock 5 makes the tamper window zero for high-value authorizations — so a
+    // `mandare kill` that commits WHILE the door waits for the witness ack must
+    // be honored: the ack succeeds, but the authorization must still DECLINE and
+    // the reservation settle to zero (HIGH-2 parity with the gateway path).
+    const gate = gateThat('ok');
+    const originalRequireAck = gate.requireAck;
+    let killDuringAck: (() => Promise<void>) | null = null;
+    gate.requireAck = async () => {
+      if (killDuringAck !== null) await killDuringAck();
+      return originalRequireAck();
+    };
+    const rail = await openTestRail({ cards: ['ic_wg6'], deps: { witnessGate: gate } });
+    killDuringAck = async () => {
+      await kill(rail.ledger, agentSubject(rail.mandate.agent));
+    };
+    try {
+      const response = await postWebhook(
+        rail.app,
+        authorizationEvent({ authorizationId: 'iauth_wg6', cardId: 'ic_wg6', amountMinorUnits: 400 })
+      );
+      expect(response.statusCode).toBe(200);
+      expect((response.json() as { approved: boolean }).approved).toBe(false); // the kill wins
+      expect(gate.calls).toBe(1);
+      const intents = entriesOfType(rail.dbPath, CARD_AUTH_INTENT);
+      const results = entriesOfType(rail.dbPath, CARD_AUTH_RESULT);
+      expect(intents).toHaveLength(1);
+      expect(results).toHaveLength(1);
+      expect(results[0]?.outcome_ref).toBe(intents[0]?.entry_hash);
+      expect(results[0]?.cost.amount).toBe(0);
     } finally {
       await rail.close();
     }

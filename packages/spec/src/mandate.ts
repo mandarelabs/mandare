@@ -11,6 +11,14 @@ import { CurrencyCode, IsoUtcTimestamp, SignatureBlock } from './signature.js';
  * schema_version bump (rule R6).
  */
 
+/**
+ * Spend rails. `gateway` (LLM) and `card` (Stripe Issuing) are IMPLEMENTED and
+ * enforced end-to-end. `x402` and `credits` are RESERVED values in the frozen
+ * contract (SPEC §7 roadmap): no door serves them yet, so a mandate that lists
+ * them has no enforcing rail — the policy engine's rail selection matches only
+ * the implemented rails. Kept in the union so adding those rails later needs no
+ * schema_version bump (R6). Do not read the enum as a capability claim.
+ */
 export const SpendRail = Type.Union([
   Type.Literal('gateway'),
   Type.Literal('card'),

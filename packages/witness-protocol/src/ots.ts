@@ -317,10 +317,20 @@ function parseAttestation(reader: ByteReader): OtsAttestation {
   const payload = new ByteReader(reader.varbytes());
   const tagHex = bytesToHex(tag);
   if (tagHex === bytesToHex(PENDING_ATTESTATION_TAG)) {
-    return { kind: 'pending', uri: new TextDecoder().decode(payload.varbytes()) };
+    const uri = new TextDecoder().decode(payload.varbytes());
+    // A canonical pending attestation payload is EXACTLY the calendar URI. Any
+    // trailing bytes make a non-canonical .ots that would re-serialize to
+    // different bytes (the serializer emits only the URI) — reject it, matching
+    // the top-level `!reader.exhausted` checks, so round-trip fidelity holds
+    // (S8/C3). The unknown-tag branch below keeps opaque payloads verbatim.
+    if (!payload.exhausted) throw new OtsError('trailing bytes in pending attestation payload');
+    return { kind: 'pending', uri };
   }
   if (tagHex === bytesToHex(BITCOIN_ATTESTATION_TAG)) {
-    return { kind: 'bitcoin', height: payload.varuint() };
+    const height = payload.varuint();
+    // A canonical Bitcoin attestation payload is EXACTLY the block height.
+    if (!payload.exhausted) throw new OtsError('trailing bytes in bitcoin attestation payload');
+    return { kind: 'bitcoin', height };
   }
   // Unknown attestation (litecoin/ethereum/… tags exist in the wild): keep
   // the FULL opaque payload so a re-serialized .ots stays byte-faithful for

@@ -83,10 +83,13 @@ the reservation settles to ZERO and the action is refused
 high-value doors shut — it can never open one, and it can never block
 `mandare kill` (the kill switch is local by S3 ruling).
 
-Measured cost (CI bench, local witness, 500+ entry ledger): **p50 ~15ms,
-p99 ~29ms** per gated ack — on top of the card rail's ~1ms decision path,
-roughly 68× inside Stripe's 2s budget at p99. `MANDARE_WITNESS_ACK_MODE=all`
-gates every action; `off` streams without gating (lock 4 only).
+Measured cost (developer hardware, local witness, 500+ entry ledger): **p50
+~15ms, p99 ~29ms** per gated ack — on top of the card rail's ~1ms decision
+path, roughly 68× inside Stripe's 2s budget at p99. These figures are dev-box
+measurements; the CI assertion is only p99 < 500ms (`test/witness-bench.test.ts`
+prints the real numbers but does not gate on the specific values).
+`MANDARE_WITNESS_ACK_MODE=all` gates every action; `off` streams without gating
+(lock 4 only).
 
 ## Public anchoring
 

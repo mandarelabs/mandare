@@ -137,9 +137,11 @@ describe('streaming pass-through + usage tee', () => {
     const { entries } = readLedger(gw.dbPath);
     expect(entries).toHaveLength(2);
     const settled = entries[1] as LedgerEntryV1;
-    // Estimation path: input 600 (from message_start), output ceil(19/3)=7.
+    // Estimation path: input 600 (from message_start), output = the observed
+    // text's UTF-8 byte count as a token UPPER bound (S8/S1): 'partial output
+    // text' = 19 bytes ⇒ 19 (never under-records a token-dense aborted stream).
     expect(settled.cost.tokens_in).toBe(600);
-    expect(settled.cost.tokens_out).toBe(7);
+    expect(settled.cost.tokens_out).toBe(19);
     expect(settled.cost.amount).toBeGreaterThan(0);
     expect(settled.outcome_ref).toBe((entries[0] as LedgerEntryV1).entry_hash);
   });

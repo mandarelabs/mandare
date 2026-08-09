@@ -104,9 +104,11 @@ no's.
   they may never be weakened to make a change pass.
 - **Supply chain**: pnpm 10 with install scripts off, 3-day dependency
   cooldown, frozen lockfiles, hand-rolled security primitives pinned to
-  official test vectors (RFC 6962, did:key, Stripe signatures, OTS). From
-  launch: npm Trusted Publishing (OIDC provenance), cosign-signed images,
-  signed skill envelopes. Honest reproducibility bar in
+  official test vectors where they exist (RFC 6962 CT vectors, did:key/base58)
+  and otherwise tested against the published wire scheme with adversarial
+  round-trip suites (Stripe signatures, OpenTimestamps). From launch: npm
+  Trusted Publishing (OIDC provenance), cosign-signed images, signed skill
+  envelopes. Honest reproducibility bar in
   [`REPRODUCING.md`](REPRODUCING.md).
 - **Verify without trusting us**: the verifier, passport, and witness
   protocol are Apache-2.0 and embeddable; `mandare certify` produces

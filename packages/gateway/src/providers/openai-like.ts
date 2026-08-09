@@ -44,7 +44,7 @@ function usageFromRecord(usage: Record<string, unknown>): ParsedUsage {
 
 class OpenAiLikeStreamParser implements StreamUsageParser {
   private parsed: ParsedUsage | null = null;
-  private textChars = 0;
+  private textBytes = 0;
 
   onEvent(event: SseEvent): void {
     if (event.data === '[DONE]') {
@@ -62,7 +62,9 @@ class OpenAiLikeStreamParser implements StreamUsageParser {
     for (const choice of choices) {
       const content = asRecord(asRecord(choice)?.delta)?.content;
       if (typeof content === 'string') {
-        this.textChars += content.length;
+        // UTF-8 bytes (token upper bound) so a token-dense aborted stream
+        // cannot under-record output cost at settlement (S8/S1).
+        this.textBytes += Buffer.byteLength(content, 'utf8');
       }
     }
   }
@@ -71,8 +73,8 @@ class OpenAiLikeStreamParser implements StreamUsageParser {
     return this.parsed;
   }
 
-  observedTextChars(): number {
-    return this.textChars;
+  observedTextBytes(): number {
+    return this.textBytes;
   }
 }
 

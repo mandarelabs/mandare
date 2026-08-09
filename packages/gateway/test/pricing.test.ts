@@ -38,7 +38,7 @@ describe('cost math (ceil — never undercount)', () => {
     expect(micros).toBe(13_250);
   });
 
-  test('estimate is conservative: chars/3 input + full max_tokens output', () => {
+  test('estimate is conservative: byte-bound input + full max_tokens output', () => {
     const body = { messages: [{ role: 'user', content: 'hi' }], max_tokens: 1000 };
     const estimate = estimateUsdMicros({ body, pricing: haiku });
     // Output share alone: 1000×$5/M = $0.005 → ≥ 5_000 micros.
@@ -50,6 +50,26 @@ describe('cost math (ceil — never undercount)', () => {
     const body = { messages: [{ role: 'user', content: 'hi' }] };
     const estimate = estimateUsdMicros({ body, pricing: haiku });
     expect(estimate).toBeGreaterThanOrEqual(64_000 * 5); // 64k × $5/M in micros
+  });
+
+  test('S8/S1: the reservation is a true upper bound for token-dense (CJK) input', () => {
+    const sonnet = DEFAULT_PRICING.find((entry) => entry.prefix === 'claude-sonnet-4-5');
+    if (sonnet === undefined) throw new Error('fixture: sonnet pricing missing');
+    // A hijacked agent maximizes token-dense input and kills the output side
+    // (max_tokens:1) to slip the estimate under a per-tx cap. The reservation is
+    // the cap guard and settlement applies the true cost with no guard, so the
+    // estimate MUST already cover the real cost.
+    const cjk = '预算'.repeat(20_000); // 40k CJK chars ≈ 120k UTF-8 bytes
+    const body = { model: 'claude-sonnet-4-5', max_tokens: 1, messages: [{ role: 'user', content: cjk }] };
+    const estimate = estimateUsdMicros({ body, pricing: sonnet });
+    // Worst realistic tokenization: ~1 token per CJK char (real is ≤ this). The
+    // OLD chars/3 (UTF-16) estimate reserved ~1/3 of this and let the settled
+    // cost pierce the per-tx cap on a single call; the byte bound covers it.
+    const trueCost = costUsdMicros(
+      { tokensIn: cjk.length, tokensOut: 1, cacheWriteTokens: 0, cacheReadTokens: 0 },
+      sonnet
+    );
+    expect(estimate).toBeGreaterThanOrEqual(trueCost);
   });
 
   test('currency conversion is explicit and ceils', () => {

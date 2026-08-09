@@ -18,8 +18,11 @@ gateways, frameworks, and verifier tools.
 | `mandare-sdk` (Python) | `packages/sdk-py` | Same reasoning as the TypeScript SDK; stdlib-only Python client. |
 | OpenClaw/AgentSkills skill | `integrations/openclaw` | Distribution material for agent ecosystems; carries instructions and the trust envelope, no core code. |
 
-Each Apache package carries its own `LICENSE` and `NOTICE` file and declares
-`"license": "Apache-2.0"` in its `package.json`.
+Each Apache package ships its own `LICENSE` and `NOTICE` file and declares
+Apache-2.0 in its package manifest — `"license": "Apache-2.0"` in `package.json`
+for the JS/TS packages, the `license` field in `pyproject.toml` for the Python
+SDK; the OpenClaw skill (no package manifest) ships its `LICENSE` alongside the
+skill files.
 
 ## AGPL-3.0-only packages
 

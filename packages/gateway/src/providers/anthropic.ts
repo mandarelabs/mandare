@@ -35,7 +35,7 @@ function usageFromRecord(usage: Record<string, unknown>, into: ParsedUsage): Par
 
 class AnthropicStreamParser implements StreamUsageParser {
   private merged: ParsedUsage | null = null;
-  private textChars = 0;
+  private textBytes = 0;
 
   onEvent(event: SseEvent): void {
     const data = asRecord(safeJson(event.data));
@@ -60,7 +60,10 @@ class AnthropicStreamParser implements StreamUsageParser {
     if (data.type === 'content_block_delta') {
       const delta = asRecord(data.delta);
       if (typeof delta?.text === 'string') {
-        this.textChars += delta.text.length;
+        // UTF-8 bytes, not UTF-16 length: the settle-side fallback treats this
+        // as a token UPPER bound (tokens ≤ bytes), so a token-dense (CJK)
+        // aborted stream cannot under-record output cost (S8/S1).
+        this.textBytes += Buffer.byteLength(delta.text, 'utf8');
       }
     }
   }
@@ -69,8 +72,8 @@ class AnthropicStreamParser implements StreamUsageParser {
     return this.merged;
   }
 
-  observedTextChars(): number {
-    return this.textChars;
+  observedTextBytes(): number {
+    return this.textBytes;
   }
 }
 

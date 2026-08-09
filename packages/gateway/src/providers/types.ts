@@ -23,8 +23,8 @@ export interface StreamUsageParser {
   onEvent(event: SseEvent): void;
   /** Best usage picture so far; null if none seen yet. */
   usage(): ParsedUsage | null;
-  /** Assistant text characters observed — aborted-stream estimation (Q16). */
-  observedTextChars(): number;
+  /** Assistant text UTF-8 bytes observed — aborted-stream estimation (Q16). */
+  observedTextBytes(): number;
 }
 
 export interface ProviderAdapter {

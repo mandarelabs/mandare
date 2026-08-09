@@ -1,6 +1,12 @@
 import { describe, expect, test } from 'vitest';
 
-import { LLM_CALL_DENIED, readLedger } from '@mandarelabs/ledger';
+import {
+  AGENT_REVOKE,
+  LLM_CALL_DENIED,
+  agentSubject,
+  readLedger,
+  revocationProjector,
+} from '@mandarelabs/ledger';
 import { LLM_CALL_INTENT, LLM_CALL_RESULT, type LedgerEntryV1 } from '@mandarelabs/spec';
 import type { GatewayConfig } from '../../src/config.js';
 import type { WitnessDoorClient } from '../../src/server.js';
@@ -35,6 +41,15 @@ const WITNESS_CONFIG: Partial<GatewayConfig> = {
 function entriesOfType(dbPath: string, type: string): LedgerEntryV1[] {
   const { entries } = readLedger(dbPath);
   return (entries as LedgerEntryV1[]).filter((entry) => entry.action.type === type);
+}
+
+function revokeEntry(target: string) {
+  return {
+    actor: 'did:mandare:owner',
+    mandate_id: 'mnd_kill',
+    action: { type: AGENT_REVOKE, target, request_hash: 'e'.repeat(64) },
+    cost: { amount: 0, currency: 'EUR', tokens_in: 0, tokens_out: 0 },
+  };
 }
 
 const okClient = (): WitnessDoorClient & { acks: number; nudges: number } => {
@@ -233,6 +248,51 @@ describe('witness-ack gating fail-safe (lock 5)', () => {
       expect(results).toHaveLength(1);
       expect(results[0]?.cost.amount).toBe(0);
       expect(entriesOfType(gw.dbPath, LLM_CALL_DENIED)).toHaveLength(0);
+    } finally {
+      await gw.close();
+    }
+  });
+
+  test('KILL DURING ACK: a kill landing while the gate waits for the ack still refuses the call (S8/S2)', async () => {
+    // Lock 5 exists to make the tamper window ZERO for high-value actions — so
+    // a `mandare kill` that commits WHILE the door waits for the witness ack
+    // must be honored for that in-flight call, exactly like the approval-hold
+    // path re-checks on resume (HIGH-2). The ack succeeds; the kill must win.
+    let providerCalls = 0;
+    const client = okClient();
+    const originalAckHead = client.ackHead;
+    let revokeDuringAck: (() => Promise<void>) | null = null;
+    client.ackHead = async () => {
+      if (revokeDuringAck !== null) await revokeDuringAck();
+      return originalAckHead();
+    };
+    const gw = await openTestGateway({
+      config: WITNESS_CONFIG,
+      witness: client,
+      fetchImpl: (input, init) => {
+        providerCalls += 1;
+        return openrouterOkFetch()(input, init);
+      },
+    });
+    revokeDuringAck = async () => {
+      await gw.ledger.appendProjected(revokeEntry(agentSubject(gw.config.actor)), revocationProjector());
+    };
+    try {
+      const response = await gw.app.inject({
+        method: 'POST',
+        url: '/v1/chat/completions',
+        payload: chatBody,
+      });
+      expect(response.statusCode).toBe(403);
+      expect(response.json().code).toBe('AGENT_REVOKED');
+      expect(providerCalls).toBe(0); // NOTHING executed after the kill (R1)
+      // The reservation is settled to zero and the intent is paired (R3).
+      const intents = entriesOfType(gw.dbPath, LLM_CALL_INTENT);
+      const results = entriesOfType(gw.dbPath, LLM_CALL_RESULT);
+      expect(intents).toHaveLength(1);
+      expect(results).toHaveLength(1);
+      expect(results[0]?.outcome_ref).toBe(intents[0]?.entry_hash);
+      expect(results[0]?.cost.amount).toBe(0);
     } finally {
       await gw.close();
     }

@@ -54,7 +54,7 @@ import {
   estimateUsdMicros,
   findPricing,
   costUsdMicros,
-  estimateTokensFromChars,
+  estimateTokensFromUtf8Bytes,
   usdMicrosToLedgerMicros,
   DEFAULT_PRICING,
   type ModelPricing,
@@ -894,6 +894,35 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
           code: 'WITNESS_UNAVAILABLE',
         });
       }
+      // The ack wait (up to ackTimeoutMs) is a window in which a `mandare kill`
+      // can commit. A high-value, witness-gated action is exactly where the
+      // tamper/act-after-kill window must be zero — so re-check revocation
+      // AFTER the ack, the same "revoked instantly" guarantee the approval-hold
+      // path enforces on resume (HIGH-2). Killed mid-wait ⇒ release the
+      // reservation (settle 0) and refuse; the pre-auth check already turned
+      // killed agents away at entry, so at most one in-flight call reaches here.
+      const ackRevocation = await revocationRefusal(actor);
+      if (ackRevocation !== null) {
+        const settled = await settleOrHalt(intent, requestHash, {
+          responseHash: sha256Hex(
+            ackRevocation === 'unavailable'
+              ? 'revocation-unavailable-after-ack'
+              : `revoked-after-ack:${ackRevocation.code}`
+          ),
+          costMicros: 0,
+          tokensIn: 0,
+          tokensOut: 0,
+        });
+        if (settled === null) {
+          return replyHalted(reply, intent);
+        }
+        if (ackRevocation === 'unavailable') {
+          return replyRevocationUnavailable(reply);
+        }
+        return reply
+          .code(403)
+          .send({ error: 'denied by policy', code: ackRevocation.code, reasons: [ackRevocation.reason] });
+      }
     }
 
     // Execute.
@@ -1066,12 +1095,14 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
       tokensIn = usage.tokensIn + usage.cacheWriteTokens + usage.cacheReadTokens;
       tokensOut = usage.tokensOut;
     } else if (plan.pricing !== null) {
-      tokensIn = usage?.tokensIn ?? estimateTokensFromChars(JSON.stringify(plan.body.messages ?? '').length);
+      tokensIn =
+        usage?.tokensIn ??
+        estimateTokensFromUtf8Bytes(Buffer.byteLength(JSON.stringify(plan.body.messages ?? ''), 'utf8'));
       // An aborted stream's usage (if any) predates the final delta — its
       // output count is stale, so the observed text is the better floor.
       tokensOut = Math.max(
         usage?.tokensOut ?? 0,
-        estimateTokensFromChars(usageParser.observedTextChars())
+        estimateTokensFromUtf8Bytes(usageParser.observedTextBytes())
       );
       costMicros = usdMicrosToLedgerMicros(
         costUsdMicros(

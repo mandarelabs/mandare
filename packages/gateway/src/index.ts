@@ -9,7 +9,7 @@ export type { GatewayConfig, ProviderEndpoint } from './config.js';
 export {
   DEFAULT_PRICING,
   costUsdMicros,
-  estimateTokensFromChars,
+  estimateTokensFromUtf8Bytes,
   estimateUsdMicros,
   findPricing,
   loadPricingTable,

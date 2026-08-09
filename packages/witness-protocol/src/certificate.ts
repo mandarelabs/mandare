@@ -245,13 +245,27 @@ export async function verifyIntegrityCertificate(
   //    to use the victim's key, at which point the bundle signature fails.
   const { signature, ...unsigned } = certificate;
   const doorKey = options.doorPublicKeyHex ?? certificate.ledger.door_public_key;
+  const doorKeyId = await sha256HexAsync(hexToBytes(doorKey));
   const declaredKeyBindsSource =
     (await sha256HexAsync(hexToBytes(certificate.ledger.door_public_key))) ===
     certificate.ledger.door_key_id;
+  // The witness, consistency, and anchor checks (2, 3, 5) are ALL bound to
+  // certificate.ledger.door_key_id — the SOURCE identity. Binding only the
+  // bundle signature to the trusted key (out-of-band mode) is not enough: a
+  // key-holding operator could witness a curated/truncated tree under a FRESH
+  // source_id, self-declare that source in the certificate, and still sign the
+  // bundle with the trusted door key — passing verification while the
+  // witnessed/anchored history belongs to a parallel source the auditor never
+  // meant to audit (S8/C1). Require the certified source to BE the trusted key:
+  // door_key_id == sha256(doorKey). In self-declared mode this is exactly
+  // declaredKeyBindsSource (doorKey == door_public_key), so it is a no-op there
+  // and only tightens the stronger out-of-band path.
+  const sourceBindsDoorKey = certificate.ledger.door_key_id === doorKeyId;
   const digest = await bundleDigest(unsigned);
   const bundleOk =
     declaredKeyBindsSource &&
-    signature.key_id === (await sha256HexAsync(hexToBytes(doorKey))) &&
+    sourceBindsDoorKey &&
+    signature.key_id === doorKeyId &&
     (await verifyEd25519(doorKey, signature.value, digest));
   push({
     name: 'bundle-signature',
@@ -259,11 +273,13 @@ export async function verifyIntegrityCertificate(
     basis: 'proof',
     detail: bundleOk
       ? options.doorPublicKeyHex !== undefined
-        ? 'certificate signed by the out-of-band door key'
+        ? 'certificate signed by the out-of-band door key, which is also the certified source'
         : 'certificate signed by its self-declared door key (pass an out-of-band key to bind authorship)'
       : !declaredKeyBindsSource
         ? 'ledger.door_key_id is not sha256(ledger.door_public_key) — the source identity is forged'
-        : 'certificate signature INVALID — the bundle was altered or the key is wrong',
+        : !sourceBindsDoorKey
+          ? 'certified source (ledger.door_key_id) is not the out-of-band door key — the witnessed history belongs to a different source'
+          : 'certificate signature INVALID — the bundle was altered or the key is wrong',
   });
 
   // 2. Witnessed head: the witness's signature over the head history entry.
@@ -415,9 +431,23 @@ export async function verifyIntegrityCertificate(
         const proof = await parseOtsProof(base64UrlToBytes(inclusion.epoch.ots_base64));
         const commitsRoot = digestEquals(proof.digest, inclusion.epoch.aggregate.root);
         if (commitsRoot && collectBitcoin(proof.timestamp).length > 0) {
+          // The receipt commits the epoch root AND carries a Bitcoin attestation
+          // tag — but confirming that attestation names a REAL, confirmed block
+          // requires a Bitcoin node/header lookup, which this OFFLINE verifier
+          // cannot do. The tag's mere presence is NOT public-chain finality: a
+          // witness-key holder (solo topology) can fabricate an attestation tag
+          // committing any digest (S8/C2). Report it honestly as
+          // recorder-attested and tell the relying party to verify the .ots
+          // against a chain — never GATE the verdict on a finality claim this
+          // verifier could not check. (proof-basis is reserved for what is
+          // re-derived here: a receipt that does NOT commit the root, or is
+          // unparseable, remains a proof-basis failure below — those ARE
+          // offline-detectable lies.)
           anchorOk = true;
-          anchorBasis = 'proof';
-          anchorDetail = 'OpenTimestamps proof commits the epoch root to Bitcoin (verify the .ots against a node)';
+          anchorBasis = 'recorder-attested';
+          anchorDetail =
+            'OpenTimestamps receipt commits the epoch root and declares a Bitcoin attestation — ' +
+            'verify the .ots against a Bitcoin node/explorer to confirm finality (not checkable offline)';
         } else if (commitsRoot) {
           anchorDetail = 'OpenTimestamps proof commits the epoch root but is still PENDING Bitcoin confirmation (hours)';
         } else {

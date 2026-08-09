@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
+import { bytesToBase64Url, hexToBytes } from '@mandarelabs/spec';
 import { computeTreeHead, consistencyProof, inclusionProof } from '@mandarelabs/verifier';
 
 import {
@@ -8,6 +9,7 @@ import {
   signEpochSummary,
 } from '../src/aggregate.js';
 import { MockAnchor } from '../src/anchor.js';
+import { serializeOtsProof } from '../src/ots.js';
 import {
   buildIntegrityCertificate,
   parseIntegrityCertificate,
@@ -30,7 +32,9 @@ interface Fixture {
   certificate: IntegrityCertificate;
 }
 
-async function buildFixture(options: { discloseSeqs?: number[] } = {}): Promise<Fixture> {
+async function buildFixture(
+  options: { discloseSeqs?: number[]; otsBitcoinAnchor?: boolean } = {}
+): Promise<Fixture> {
   const doorSigner = makeSigner();
   const witnessSigner = makeSigner();
   const chain = buildChain(doorSigner, 6);
@@ -64,18 +68,44 @@ async function buildFixture(options: { discloseSeqs?: number[] } = {}): Promise<
   };
   const snapshot = await buildAggregate([record, stranger]);
   const leafIndex = snapshot.records.findIndex((r) => r.source_id === record.source_id);
-  const receipt = await new MockAnchor().anchor(snapshot.head.root);
-  const signedEpoch = await signEpochSummary(
-    {
-      epoch: 1,
-      created_at: '2026-08-09T10:05:00Z',
-      aggregate: snapshot.head,
-      anchor_status: receipt.status,
-      ots_base64: receipt.proof,
-      anchor_kind: receipt.kind,
-    },
-    witnessSigner
-  );
+  const signedEpoch = options.otsBitcoinAnchor
+    ? await signEpochSummary(
+        {
+          epoch: 1,
+          created_at: '2026-08-09T10:05:00Z',
+          aggregate: snapshot.head,
+          anchor_status: 'confirmed',
+          // A real .ots that commits the aggregate root AND carries a Bitcoin
+          // attestation TAG — but nothing here proves the block exists (that
+          // needs a node). C2: tag presence must NOT be graded 'proof' offline.
+          ots_base64: bytesToBase64Url(
+            serializeOtsProof({
+              digest: hexToBytes(snapshot.head.root),
+              timestamp: {
+                msg: hexToBytes(snapshot.head.root),
+                attestations: [{ kind: 'bitcoin', height: 812_345 }],
+                ops: [],
+              },
+            })
+          ),
+          anchor_kind: 'opentimestamps',
+        },
+        witnessSigner
+      )
+    : await (async () => {
+        const receipt = await new MockAnchor().anchor(snapshot.head.root);
+        return signEpochSummary(
+          {
+            epoch: 1,
+            created_at: '2026-08-09T10:05:00Z',
+            aggregate: snapshot.head,
+            anchor_status: receipt.status,
+            ots_base64: receipt.proof,
+            anchor_kind: receipt.kind,
+          },
+          witnessSigner
+        );
+      })();
 
   const discloseSeqs = options.discloseSeqs ?? [2, 5];
   const certificate = await buildIntegrityCertificate({
@@ -138,6 +168,81 @@ describe('integrity certificate', () => {
     expect(verdict.checks.find((c) => c.name === 'chain-valid-and-complete')?.basis).toBe(
       'recorder-attested'
     );
+  });
+
+  test('S8/C1: bound mode refuses a certificate whose witnessed source is not the trusted door key', async () => {
+    // The dishonest-operator attack: hold the trusted door key A, but launder a
+    // curated/truncated history by witnessing it under a FRESH source id B, then
+    // self-declare B in the certificate while signing the bundle with A. Pre-fix
+    // this verified VALID — the witnessed history was B's parallel timeline, not
+    // A's real (truncation-detecting) one.
+    const trusted = makeSigner(); // A — the auditor's out-of-band door key
+    const parallel = makeSigner(); // B — the fresh source the curated tree is witnessed under
+    const witnessSigner = makeSigner();
+
+    const chain = buildChain(trusted, 4); // every entry really signed by A
+    const hashes = entryHashesOf(chain);
+    const tree = await computeTreeHead(hashes);
+    const witnessedHead = await computeTreeHead(hashes.slice(0, 3));
+
+    const record: WitnessedHeadRecord = {
+      source_id: parallel.keyId, // witnessed under B (first contact — witness acks)
+      head: witnessedHead,
+      ts: '2026-08-09T10:00:00Z',
+      witnessed_at: '2026-08-09T10:00:01Z',
+    };
+    const ackPayload: import('../src/messages.js').HeadAckPayload = {
+      protocol: WITNESS_PROTOCOL,
+      type: 'head.ack',
+      source_id: record.source_id,
+      head: record.head,
+      witnessed_at: record.witnessed_at,
+      witness_key_id: witnessSigner.keyId,
+    };
+    const ack = await signPayload(ackPayload, witnessSigner);
+
+    const certificate = await buildIntegrityCertificate({
+      ledger: {
+        door_id: 'gateway:test',
+        door_key_id: parallel.keyId, // the parallel source B drives checks 2/3/5
+        door_public_key: parallel.publicKeyHex,
+      },
+      treeHead: tree,
+      entryCount: chain.length,
+      witness: { record, ack, consistency_proof: await consistencyProof(hashes, witnessedHead.size) },
+      anchor: null,
+      disclosed: [{ seq: 2, entry: chain[1]!, inclusion_proof: await inclusionProof(hashes, 1) }],
+      revocation: null,
+      signer: trusted, // bundle signed by A → signature.key_id = sha256(A)
+    });
+
+    const verdict = await verifyIntegrityCertificate(certificate, {
+      witnessPublicKeyHex: witnessSigner.publicKeyHex,
+      doorPublicKeyHex: trusted.publicKeyHex, // auditor trusts A out-of-band
+    });
+
+    expect(verdict.ok).toBe(false);
+    const bundle = verdict.checks.find((c) => c.name === 'bundle-signature');
+    expect(bundle?.ok).toBe(false);
+    expect(bundle?.detail).toMatch(/different source/i);
+  });
+
+  test('S8/C2: an OTS Bitcoin attestation is recorder-attested (verify externally), never proof', async () => {
+    const { certificate, witnessSigner, doorSigner } = await buildFixture({ otsBitcoinAnchor: true });
+    const verdict = await verifyIntegrityCertificate(certificate, {
+      witnessPublicKeyHex: witnessSigner.publicKeyHex,
+      doorPublicKeyHex: doorSigner.publicKeyHex,
+    });
+    const anchor = verdict.checks.find((c) => c.name === 'public-anchor');
+    // The tag's mere presence is not offline-verifiable finality — report it,
+    // never gate on it (pre-fix this was basis 'proof', ok true).
+    expect(anchor?.basis).toBe('recorder-attested');
+    expect(anchor?.ok).toBe(true);
+    expect(anchor?.detail).toMatch(/verify the \.ots against a bitcoin node/i);
+    // The otherwise-sound certificate still verifies (the anchor doesn't gate),
+    // and the witness-signed aggregation proof still gates and passes.
+    expect(verdict.ok).toBe(true);
+    expect(verdict.checks.find((c) => c.name === 'witness-aggregated-head')?.ok).toBe(true);
   });
 
   test('HIGH-2: an attacker-fabricated (unsigned) epoch aggregate is refused', async () => {

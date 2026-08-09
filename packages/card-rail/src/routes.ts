@@ -427,6 +427,19 @@ export async function registerCardRail(
         }
         return respond(false);
       }
+      // The ack wait is a window in which a `mandare kill` can commit; a
+      // high-value authorization must NOT be approved after it. Re-check
+      // revocation after the ack (HIGH-2 parity with the gateway path) and, if
+      // the actor/card was killed mid-wait, release the reservation and decline
+      // (fail-closed — 'unavailable' declines too).
+      const ackRevocation = await readRevocationRefusal(actor, auth.cardId);
+      if (ackRevocation !== null) {
+        const released = await settleAuthorization(reservation.entry, auth, 0);
+        if (released === null) {
+          halted = true;
+        }
+        return respond(false);
+      }
     }
 
     // 7. SETTLE: the approval decision is the act; its record must exist

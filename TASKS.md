@@ -1420,7 +1420,185 @@ fixed same session:
 
 ---
 
-## → S8 handoff (parallel security/contract/red-team review before launch)
+## S8 — Adversarial pre-launch review (2026-08-09)
+
+**Scope (per the S7→S8 handoff):** the last gate before the code goes public —
+an independent, adversarial pass across four disjoint lenses (crypto/integrity ·
+spend/enforcement · packaging/supply-chain · docs/claims), *find → verify → fix*,
+not a build session. Frozen floor binding: S0–S7 red-team suites (both drivers)
+and Demos 1–5 must end green and un-weakened.
+
+**Status: complete.** All exit criteria met. Four parallel Agent-Teams reviewers
+ran, each prompted to break the system; every reported finding was re-traced
+against live code by the orchestrator and only fixed if it reproduced. **15
+findings — 3 HIGH, 4 MEDIUM, 5 LOW, 3 INFO** — all CONFIRMED findings fixed with
+a regression test that fails on pre-fix code, 2 documented as accepted residuals
+with rationale (no silent won't-fix). Full local gate green
+(build/typecheck/lint+license+boundaries/test/red-team/smoke/demo×5 +
+stack/skill/sdk-py smokes); compose-smoke is CI-only (no local Docker — S7 debt).
+S0–S7 red-team floor + Demos 1–5 frozen and green; `packages/spec` schema
+untouched (R6 — the one spec edit is a comment). Written summary:
+`docs/SECURITY-REVIEW-S8.md`.
+
+### Findings + resolutions (full detail in docs/SECURITY-REVIEW-S8.md)
+
+- **C1 — HIGH (crypto)** — the integrity certificate's **bound mode** bound only
+  the bundle *signature* to the auditor's out-of-band door key, never the
+  certified `door_key_id` that drives the witness/anchor/consistency checks. A
+  key-holding operator could witness a curated/truncated tree under a FRESH
+  `source_id`, self-declare it, sign the bundle with the trusted key, and pass
+  verification over a parallel witnessed timeline — defeating the certificate's
+  core purpose (bind to the operator's REAL witnessed history). FIXED: `bundleOk`
+  now also requires `door_key_id == sha256(doorKey)` (no-op in self-declared
+  mode). Red-team test `S8/C1` in `certificate.test.ts`.
+- **S1 — HIGH (spend)** — the pre-flight reservation (the cap guard) estimated
+  input tokens as `chars/3` over the UTF-16 length — a true bound only for Latin.
+  CJK/token-dense input under-counted ~3×, so `max_tokens:1` + a token-dense
+  prompt reserved under the per-tx cap while settlement (no cap guard, by design)
+  applied the true 2–3× cost past it. FIXED: estimate input tokens as the UTF-8
+  **byte length** — a provable upper bound (tokens ≤ bytes for byte-level BPE)
+  for any script; same bound applied to the settle-side fallback
+  (usage-less/aborted streams, `observedTextBytes`) so the ledger never
+  under-records. Test `S8/S1` in `pricing.test.ts`; aborted-stream assertion in
+  `streaming.test.ts` updated to the conservative value.
+- **P1 — HIGH (packaging)** — `verify-openclaw-skill.mjs` blessed an UNSIGNED
+  package as VERIFIED (exit 0), and when signed read the verifying key FROM THE
+  ENVELOPE (no pinning) — so a re-packaged tampered `SKILL.md` (agent-executed
+  instructions) or a self-signed one passed, fooling a CI gate keyed on exit
+  code. FIXED: unsigned FAILS by default (`--allow-unsigned` = explicit dev
+  escape); a VERIFIED verdict requires the key be PINNED via `--expect-key <hex>`
+  and match. `skill-smoke.mjs` now exercises the downgrade/re-hash, unsigned,
+  unpinned, and wrong-key attacks (all refused) plus the pinned-match pass.
+- **C2 — MEDIUM (crypto)** — the gating `public-anchor` check graded
+  `basis:'proof', ok:true` on the mere PRESENCE of a Bitcoin attestation tag
+  committing the epoch root, never verifying the block against a chain
+  (impossible offline). Solo topology (witness key on the same host) ⇒ operator
+  forges "Bitcoin finality." FIXED: the OTS-with-Bitcoin-tag case is now
+  `recorder-attested` ("verify the .ots against a node") and never gates the
+  verdict; offline-detectable lies (doesn't commit the root, unparseable) still
+  gate. Test `S8/C2`.
+- **S2 — MEDIUM (spend)** — after a successful witness-ack, both rails executed
+  with NO revocation re-check — a `mandare kill` landing during the ack wait was
+  ignored for that in-flight high-value call (the exact class lock-5 promises a
+  zero tamper window; inconsistent with the approval-hold HIGH-2 re-check).
+  FIXED: both rails re-check revocation after the ack; killed mid-wait ⇒ settle
+  the reservation to 0 and refuse/decline. Red-team `KILL DURING ACK` on gateway
+  AND card rail.
+- **C3 — LOW (crypto)** — the OTS parser silently dropped trailing bytes in
+  bitcoin/pending attestation payloads (non-canonical `.ots` round-trips to
+  different bytes). FIXED: assert the attestation payload is exhausted.
+- **P2 — LOW (packaging)** — `web-bot-auth` (pre-1.0, unaudited, in the Apache
+  signing path) floated under a caret. FIXED: pinned exact `0.1.3`; on the audit
+  list.
+- **D1 — MEDIUM (docs)** — README + Security page claimed "official test vectors"
+  for Stripe signatures + OTS (+ canonical JSON) — none published; those use the
+  documented wire scheme + adversarial round-trip suites. FIXED: reworded to the
+  true split (RFC 6962 CT + did:key/base58 ARE official vectors).
+- **D2 — MEDIUM (docs)** — "even the operator can't rewrite history" stated
+  unconditionally on the overview + Concepts pages without the same-host
+  solo-compose residual co-located. FIXED: residual co-located on
+  `index.mdx`/`concepts.mdx` (team mode / second host vs. single-host solo).
+- **D3 — LOW (docs)** — latency figures presented as "CI bench" while CI asserts
+  only p99 < 500ms. FIXED: labeled developer-hardware; stated the CI assertion.
+- **D4 — LOW (docs)** — LICENSING.md's "declares license in its package.json"
+  false for `sdk-py` (pyproject) + OpenClaw skill (no manifest). FIXED: reworded.
+- **D5 — INFO (docs)** — the frozen `SpendRail` union advertises unimplemented
+  `x402`/`credits` rails. FIXED: a schema COMMENT marks them RESERVED (no
+  schema_version bump — R6 intact).
+- **P3 — INFO (packaging)** — the Docker image baked internal docs (`TASKS.md`,
+  `CLAUDE.md`, `docs/`) via `COPY . .`. FIXED: added to `.dockerignore`.
+- **C4 — LOW/INFO (crypto)** — RFC 9421 omits `@query`/uncovered headers.
+  ACCEPTED RESIDUAL (verified): no door reads the query string — every security
+  field comes from the content-digest-bound body. Kept as documented
+  defense-in-depth guidance; keep doors deciding only on the signed body.
+- **P4 — INFO (packaging)** — `@napi-rs/keyring` native binary in the vault
+  process (no install script runs). ACCEPTED (design: OS keychain needs native
+  code); added to the auditor's binary-provenance target list.
+
+### Decisions (S8 latitude; BUILD-DECISIONS untouched)
+
+1. **S1 fix = a true upper bound, not a better heuristic.** UTF-8 byte length is
+   a provable token ceiling for byte-level BPE (Anthropic/OpenAI), so no script
+   under-reserves — the property the pricing comment already claimed. Output is
+   still bounded by max_tokens/the ceiling (which dominates ordinary calls), so
+   the extra input headroom only bites the attack shape and is released at
+   settlement.
+2. **C2 fix = honesty over gating.** Offline, Bitcoin finality is unprovable
+   (needs a node), so the anchor is reported (recorder-attested, "verify
+   externally") and never gates the verdict; only offline-detectable
+   contradictions gate. The verdict continues to gate strictly on proof-basis
+   checks (the project's honesty rule, kept in code).
+3. **P1 fix = trust must be pinned.** A VERIFIED verdict now requires a pinned
+   publisher key; unsigned/unpinned/self-signed all fail closed. `--allow-unsigned`
+   is the explicit local-dev escape (same posture as the gateway's insecure-bind
+   opt-out). `release.yml` will run `verify --expect-key <release pubkey>` at S9.
+4. **S2 fix = HIGH-2 parity for lock 5.** The approval-hold path already re-checks
+   revocation on resume; the witness-ack path now does the same, so "revoked
+   instantly" holds across the ack window on both rails.
+
+### Deviations from BUILD-DECISIONS
+
+None. The one `packages/spec` edit is a comment (D5); the schema and its
+`schema_version` are unchanged (R6 honored).
+
+### Known debt (carried, unchanged this session)
+
+- Compose/Docker layer CI-proven only (no local runtime) — compose-smoke in CI is
+  the binding check.
+- `witness-live-smoke` (real OTS calendars → Bitcoin) still a founder run (S6).
+- Stripe Issuing live smoke blocked on the founder's toggle (S5).
+- OpenRouter `disableKey` belt into `mandare kill` (S3, oldest open item) — still
+  needs the founder's per-agent key-hash mapping decision; local kill authority
+  is complete without it.
+- Per-sync O(n) witness tree recompute + multi-witness config knob (S6) — S9+.
+
+---
+
+## → S9 handoff (launch)
+
+S8 closed the review; the code is now internally consistent, honestly
+documented, and green on both drivers. S9 is the LAUNCH flip — the first session
+that publishes anything. Nothing was published in S0–S8.
+
+Before flipping, in order:
+
+1. **Pre-flip history secret scan.** Run **gitleaks** over the FULL history
+   (`gitleaks detect --source . --log-opts="--all"`) — the S8 manual scan across
+   36 commits was clean (only test fixtures/regex matched), but gitleaks is the
+   binding check and its rule set is broader. Also review commit messages for the
+   publicity boundary (no internal codenames/keys). Repo stays private until this
+   passes.
+2. **The four founder to-dos** (dashboard actions the build can't do):
+   - Confirm the MCP/npm namespace `com.mandarelabs` + `@mandarelabs/*` (DNS
+     verification against mandarelabs.com) and enable npm **Trusted Publishing**
+     on the `mandarelabs` org; add the `MANDARE_RELEASE_KEY_PEM` repo secret when
+     arming release.
+   - Enable **Stripe Issuing** on the TEST account + set the webhook timeout
+     default to DECLINE, then run `pnpm card-live-smoke` (S5 debt).
+   - Run the **OpenTimestamps live-smoke** against the public calendar pool and
+     confirm the `.ots` upgrades to a Bitcoin attestation after a few hours (S6
+     debt).
+   - Decide the **OpenRouter `disableKey`** per-agent key-hash mapping so the
+     cloud belt can wire into `mandare kill` (S3 debt, oldest open item).
+3. **Launch assets** (Q29 playbook): the README **<30s demo GIF** (the runaway
+   loop dying at the cap — currently "lands with the public release"), the
+   separate **`examples/`** artifacts, and the **Show HN** post (weekday
+   ~14–16h CET; lead comment explains the AGPL/Apache split + threat model +
+   the honest residuals from `docs/SECURITY-REVIEW-S8.md`).
+4. **Arm `release.yml`:** flip `publish=true`, add the tag-push trigger + the SLSA
+   job, and run `verify-openclaw-skill.mjs --expect-key <release pubkey>` on the
+   packaged skill after signing (the P1 fix makes an unsigned/unpinned artifact
+   fail the gate). Confirm the version pins that S7 scheduled to drop (next 16 /
+   fumadocs 16 / orama override / files-thunk shim) at the S9 dependency pass.
+5. **The external audit** (Q27: Radically Open Security / NLnet-NGI0) should run
+   before the OpenClaw skill launch — `docs/SECURITY-REVIEW-S8.md` lists the seven
+   targets it should focus on (web-bot-auth, the keyring binary, live Bitcoin
+   anchoring, Stripe live, the compose topology, timing side channels, kill under
+   a second writer).
+
+---
+
+## → S8 handoff (parallel security/contract/red-team review before launch) — ORIGINAL (fulfilled — see the S8 log above)
 
 S8 is the Agent-Teams review phase (BUILD-DECISIONS session plan): several
 INDEPENDENT full-context reviewers over the now-complete system, before S9

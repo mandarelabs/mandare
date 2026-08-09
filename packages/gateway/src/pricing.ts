@@ -109,18 +109,30 @@ export function costUsdMicros(usage: UsageTokens, pricing: ModelPricing): number
 
 /**
  * Tokenizer-free pre-flight estimate (Q16 allows estimation ONLY here and
- * for aborted streams): input ≈ chars/3 (deliberately high vs the ~4 chars/
- * token English average), output = the request's max_tokens or the model
- * ceiling. Conservative by construction: over-reserving is released at
- * settlement; under-reserving would let true cost pierce the cap.
+ * for aborted streams). The reservation is the cap guard, so the input side
+ * must be a TRUE UPPER BOUND on token count — not a heuristic. A byte-level
+ * BPE tokenizer (Anthropic/OpenAI) never emits MORE tokens than the UTF-8 byte
+ * length of its input: the base vocabulary is the 256 single bytes and merges
+ * only REDUCE the count, so tokens ≤ bytes for ANY input, adversarial included.
+ * Counting UTF-8 bytes therefore over-reserves for every script.
+ *
+ * The old estimate (`chars/3` over the UTF-16 `.length`) held only for Latin
+ * text: for CJK / many-bytes-per-token scripts it UNDER-counted by ~3×, so a
+ * hijacked agent could shape `max_tokens:1` + a token-dense prompt to reserve
+ * under the per-tx cap yet settle the true (2–3× larger) cost past it (S8/S1) —
+ * settlement applies the real cost with no cap guard, by design. The byte bound
+ * closes that. Output is already bounded by max_tokens or the model ceiling
+ * (which dominates the reservation on any normal call), so this only tightens
+ * the rare tiny-output + huge-input shape the attack needs; the extra headroom
+ * on ordinary calls is released at settlement.
  */
 export function estimateUsdMicros(args: {
   body: Record<string, unknown>;
   pricing: ModelPricing;
 }): number {
-  const inputChars = JSON.stringify(args.body.messages ?? '').length +
-    JSON.stringify(args.body.system ?? '').length;
-  const inputTokens = Math.ceil(inputChars / 3);
+  const inputText =
+    JSON.stringify(args.body.messages ?? '') + JSON.stringify(args.body.system ?? '');
+  const inputTokens = Buffer.byteLength(inputText, 'utf8');
   const requestedMax = args.body.max_tokens ?? args.body.max_completion_tokens;
   const outputTokens =
     Number.isInteger(requestedMax) && (requestedMax as number) > 0
@@ -132,9 +144,16 @@ export function estimateUsdMicros(args: {
   );
 }
 
-/** Estimate output tokens for an ABORTED stream from the text observed so far. */
-export function estimateTokensFromChars(chars: number): number {
-  return Math.ceil(chars / 3);
+/**
+ * Upper-bound token count from a UTF-8 byte length — used to settle a stream
+ * that carried no authoritative usage (aborted, or a usage-less endpoint).
+ * A byte-level BPE tokenizer never emits more tokens than the input's UTF-8
+ * byte count (see estimateUsdMicros), so counting bytes can never UNDER-record
+ * spend at settlement, for any script (S8/S1). Over-recording on an aborted
+ * stream is the safe direction for a cap; the true-up reconciles later.
+ */
+export function estimateTokensFromUtf8Bytes(utf8Bytes: number): number {
+  return utf8Bytes;
 }
 
 /**

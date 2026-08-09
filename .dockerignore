@@ -14,3 +14,9 @@ node_modules
 docs/demos
 dist
 data
+# Internal build/agent docs — never runtime inputs, keep them out of the image
+# (the 100k+ line build log and the agent instructions ship in the public repo,
+# not the container). README/LICENSE/SECURITY stay.
+TASKS.md
+**/CLAUDE.md
+docs

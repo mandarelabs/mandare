@@ -30,7 +30,8 @@ every attack below that we claim to catch is a permanent test.
   exact body bytes), revocation state (checked before auth, every request),
   and approval thresholds (fail-closed holds with a bounded pending set).
 - Card authorizations decline **at the network** inside Stripe's 2-second
-  budget; the decision path is fully local (p99 well under 10 ms).
+  budget; the decision path is fully local (p99 well under 10 ms on developer
+  hardware; the CI assertion is p99 < 500 ms).
 
 ## What is tamper-EVIDENT (and against whom)
 

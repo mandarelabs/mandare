@@ -16,7 +16,7 @@ Mandare is that piece, as local-first open-source infrastructure:
 | **Mandate** | *What may it do?* | A human signs machine-readable authority once: spend caps (per call / day / task / total), validity window, approval thresholds. The gateway enforces it **before** each action. |
 | **Ledger** | *What did it do?* | Every intent, result, and refusal is an append-only, hash-linked, door-signed entry. Budget counters are a projection of the ledger — provably equal to a replay. |
 | **Kill switch** | *How do I stop it?* | `mandare kill` is a local, offline write: the gateway refuses the agent on its very next request. No cloud round-trip to jam. |
-| **Witness** | *Can history be rewritten?* | Salted chain-head fingerprints stream to an external witness (content-free). Truncation and rewrites — even by the operator — are detectable, and high-value actions can be gated on a verified witness ack. |
+| **Witness** | *Can history be rewritten?* | Salted chain-head fingerprints stream to an external witness (content-free). Truncation and rewrites are detectable — even by the operator **when the witness runs on infrastructure the operator doesn't control** (team mode / a second host; in the single-host solo stack the witness shares the machine — see the [threat model](/docs/threat-model)). High-value actions can be gated on a verified witness ack. |
 
 Two properties run through everything:
 

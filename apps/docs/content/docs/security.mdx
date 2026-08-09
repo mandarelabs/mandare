@@ -16,10 +16,12 @@ done fully:
 - **Frozen lockfile everywhere** (CI and the installer both use
   `--frozen-lockfile`).
 - **Few dependencies on purpose.** The security-critical primitives are
-  hand-rolled against official vectors with adversarial test suites rather
-  than imported with their dependency trees: RFC 6962 Merkle proofs, did:key
-  + base58, Stripe webhook signatures, the OpenTimestamps client, canonical
-  JSON. The Python client is stdlib-only.
+  hand-rolled with adversarial test suites rather than imported with their
+  dependency trees. RFC 6962 Merkle proofs and did:key + base58 are pinned to
+  official test vectors; Stripe webhook signatures, the OpenTimestamps client,
+  and canonical JSON are tested against their published wire schemes with
+  round-trip and adversarial suites (no official known-answer vectors are
+  published for those). The Python client is stdlib-only.
 
 ## Releases (from launch)
 
