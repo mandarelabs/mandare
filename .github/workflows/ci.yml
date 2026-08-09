@@ -94,7 +94,8 @@ jobs:
       - run: pnpm skill-smoke
       - run: pnpm sdk-py-smoke
       - name: Python client unit tests (pinned cross-language vector)
-        run: python3 -m unittest discover -s packages/sdk-py/tests -v
+        working-directory: packages/sdk-py
+        run: python3 -m unittest discover -s tests -v
 
   # S7 clean-machine acceptance: a stranger following ONLY the public docs
   # gets a running gateway that stops a runaway agent at a budget. The

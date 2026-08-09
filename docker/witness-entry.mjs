@@ -20,7 +20,10 @@ const keyPath = process.env.MANDARE_WITNESS_KEY ?? '/data/witness/witness-key.pe
 const publicHexPath = process.env.MANDARE_WITNESS_PUBLIC_HEX ?? '/data/witness/public.hex';
 const anchor = process.env.MANDARE_WITNESS_ANCHOR === 'ots' ? 'ots' : 'mock';
 
+// Key and public-hex live on DIFFERENT volumes (private witness state vs
+// the shared handoff dir) — create both parents; nothing else does.
 mkdirSync(dirname(keyPath), { recursive: true });
+mkdirSync(dirname(publicHexPath), { recursive: true });
 const key = loadOrCreateDoorKey(keyPath);
 writeFileSync(publicHexPath, `${key.publicKeyHex}\n`);
 console.log(`witness-entry: public key ${key.publicKeyHex} → ${publicHexPath}`);

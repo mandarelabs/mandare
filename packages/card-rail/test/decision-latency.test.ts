@@ -35,5 +35,9 @@ describe('authorization decision latency', () => {
     } finally {
       await rail.close();
     }
-  });
+    // 30s WALL-CLOCK budget for the whole 200-auth sweep: under CI's full
+    // parallel test load (grown again in S7) the default 5s vitest timeout
+    // starves this bench before it finishes — same class of bump as the S1
+    // merkle sweeps in S5. The p99 < 500ms ASSERTION is untouched.
+  }, 30_000);
 });

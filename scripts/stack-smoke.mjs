@@ -9,14 +9,13 @@
  * Run: pnpm stack-smoke
  */
 import { spawn } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const dataDir = mkdtempSync(join(tmpdir(), 'mandare-stack-'));
-mkdirSync(join(dataDir, 'witness'), { recursive: true });
 
 const children = [];
 function fail(message) {
@@ -77,8 +76,9 @@ for (const mirrored of [
 
 // Same env contract as compose.yaml (asserted above), host-local ports, and
 // the witness's private state split from the shared dir exactly as compose
-// splits its volumes.
-mkdirSync(join(dataDir, 'witness-state'), { recursive: true });
+// splits its volumes. Deliberately NO pre-created directories here: the
+// entry scripts must create their own dirs, as they do in fresh containers
+// (a pre-creating harness masked exactly that bug once).
 const witnessEnv = {
   MANDARE_WITNESS_DB: join(dataDir, 'witness-state/witness.db'),
   MANDARE_WITNESS_KEY: join(dataDir, 'witness-state/witness-key.pem'),
