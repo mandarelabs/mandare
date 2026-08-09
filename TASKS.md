@@ -1212,7 +1212,18 @@ the compose stack); docs build green. Code Reviewer pass done (2 CRITICAL +
 1 HIGH + 5 MEDIUM + 6 LOW — ALL fixed same session, zero open). Full local
 gate green (build/typecheck/lint+license/test/red-team/smoke/demo×5 + four
 new S7 smokes). S0–S6 red-team floor and Demos 1–5 frozen and green.
-`packages/spec` untouched (R6).
+`packages/spec` untouched (R6). **CI green ON ORIGIN: run 31316026415, all
+6 jobs** (incl. the first-ever real-docker compose-smoke). Two CI iteration
+rounds, all fixes logged: ① witness-entry created only the key dir, not the
+public-hex handoff dir on the OTHER volume (fresh containers crashed; the
+stack-smoke harness had masked it by pre-creating dirs — it now creates
+none, so entry scripts must own theirs); ② python unittest needs the
+package dir as cwd; ③ the S5 card decision-latency bench needed a 30s
+wall-clock test budget under the grown parallel load (p99 assertion
+untouched — same class as the S5 merkle bump); ④ a PRE-EXISTING S5 flake
+surfaced once: the R2 no-PAN scan matched a 13-digit run INSIDE a 64-hex
+entry hash — assertion made hash-aware and STRENGTHENED (exact field
+allowlist + hash-shape proofs + PAN-scan of everything else).
 
 ### Done
 
