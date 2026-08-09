@@ -63,6 +63,7 @@ import { anthropicAdapter } from './providers/anthropic.js';
 import { openaiAdapter, openrouterAdapter } from './providers/openai-like.js';
 import type { FetchLike, ParsedUsage, ProviderAdapter } from './providers/types.js';
 import { SseParser } from './sse.js';
+import { WitnessGate, type WitnessAckClient } from './witness-gate.js';
 
 /** The ledger surface the gateway needs — narrow so tests can fake it. */
 export interface SpendLedgerWriter extends ProjectionRunner {
@@ -96,6 +97,18 @@ export interface GatewayDeps {
   fetchImpl?: FetchLike;
   /** Test hook: production values are the module constants. */
   timeouts?: { nonStreamMs: number; streamIdleMs: number };
+  /**
+   * Witness client (S6). REQUIRED when config.witness is set: streaming gets
+   * nudged on every append (lock 4) and the WitnessGate acks high-value
+   * intents before execution (lock 5). Structural so tests can fake it.
+   */
+  witness?: WitnessDoorClient;
+}
+
+/** What the door needs from a witness client (the real one is WitnessClient). */
+export interface WitnessDoorClient extends WitnessAckClient {
+  /** Mark the ledger as grown; the background stream syncs on its next tick. */
+  notifyAppend(): void;
 }
 
 /**
@@ -158,7 +171,35 @@ interface CallPlan {
 }
 
 export function buildGateway(deps: GatewayDeps): FastifyInstance {
-  const { config, ledger, policy, mandate, vault, notifier } = deps;
+  const { config, policy, mandate, vault, notifier } = deps;
+  // Witnessing (S6): every successful append nudges the streaming client
+  // (lock 4); the gate below adds ack-before-act for high-value calls
+  // (lock 5). A witness-configured door REQUIRES its client — building
+  // without one would silently run ungated (fail-open), so refuse.
+  if (config.witness !== null && deps.witness === undefined) {
+    throw new Error('config.witness is set but no witness client was provided — refusing to build ungated');
+  }
+  const witnessClient = deps.witness;
+  const ledger: SpendLedgerWriter =
+    witnessClient === undefined
+      ? deps.ledger
+      : {
+          appendProjected: async (input, project) => {
+            const result = await deps.ledger.appendProjected(input, project);
+            if (result.kind === 'appended') witnessClient.notifyAppend();
+            return result;
+          },
+          runProjection: (fn) => deps.ledger.runProjection(fn),
+        };
+  const witnessGate =
+    config.witness !== null && witnessClient !== undefined
+      ? new WitnessGate({
+          client: witnessClient,
+          ackMode: config.witness.ackMode,
+          ackTimeoutMs: config.witness.ackTimeoutMs,
+          ledgerCurrency: config.ledgerCurrency,
+        })
+      : undefined;
   const pricingTable = deps.pricingTable ?? DEFAULT_PRICING;
   const fetchImpl = deps.fetchImpl ?? (fetch as FetchLike);
   const timeouts = deps.timeouts ?? {
@@ -245,6 +286,10 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
       openai: config.openai.apiKey !== null,
       openrouter: config.openrouter.apiKey !== null,
     },
+    witness:
+      config.witness === null
+        ? { configured: false }
+        : { configured: true, ack_mode: config.witness.ackMode },
     card_rail:
       cardRailStatus === null
         ? { mounted: false }
@@ -407,6 +452,7 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
         ...(notifier === undefined ? {} : { notifier }),
         waivers: new WaiverStore(config.stripe.waiverTtlMs),
         authenticateCreate,
+        ...(witnessGate === undefined ? {} : { witnessGate }),
       });
     });
   }
@@ -819,6 +865,36 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
       });
     }
     const intent = reservation.entry;
+
+    // Witness-ack gating (S6, lock 5): a high-value intent must be witnessed
+    // off-machine BEFORE the action releases — the ack covers the current
+    // head, which includes the intent entry just appended. No verified ack ⇒
+    // nothing executed: settle the reservation to zero and refuse (R1). A
+    // dead witness closes the door for high-value calls; it never opens it.
+    if (
+      witnessGate !== undefined &&
+      witnessGate.isGated(plan.estimateLedgerMicros, mandate as MandateV1)
+    ) {
+      const verdict = await witnessGate.requireAck();
+      if (!verdict.ok) {
+        const settled = await settleOrHalt(intent, requestHash, {
+          responseHash: sha256Hex(`witness-unavailable:${verdict.reason}`),
+          costMicros: 0,
+          tokensIn: 0,
+          tokensOut: 0,
+        });
+        if (settled === null) {
+          return replyHalted(reply, intent);
+        }
+        // Generic reason to the (hostile) agent — the specific witness error
+        // (topology, connection detail) is server-side only (R4/R2 posture).
+        request.log?.warn?.(`witness ack unavailable: ${verdict.reason}`);
+        return reply.code(503).send({
+          error: 'witness acknowledgment unavailable — refusing to act (fail-closed)',
+          code: 'WITNESS_UNAVAILABLE',
+        });
+      }
+    }
 
     // Execute.
     let upstream: Response;

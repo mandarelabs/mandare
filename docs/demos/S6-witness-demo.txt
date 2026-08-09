@@ -1,0 +1,58 @@
+════════════════════════════════════════════════════════════════════
+ MANDARE DEMO 5 — the rewrite that can't hide
+════════════════════════════════════════════════════════════════════
+
+[witness] reference witness up at http://127.0.0.1:39531 (mandare witness serve)
+[witness] public key (distributed OUT-OF-BAND): 7910f29244e058fa3912caf2aabc0ccf52db3c9161b5e3cb68931c7b52e2c946
+
+[door]   8 entries appended; every head streamed + acked (lock 4)
+[witness] recorded history sizes: 1,2,3,4,5,6,7,8
+[witness] knows ONLY sizes + 32-byte salted roots — zero ledger content, e.g.
+[witness]   size=8 root=68ff0e9778ad1f345b92df635399c93e338f8a178cf02f1d9e6a639e484854a2
+
+[attacker] stealing the ledger file AND the door key (worst local case)…
+[attacker] copy A: newest 2 entries DROPPED, chain re-signed
+[attacker] copy B: entry 4 cost rewritten €1.00 → €0.000001, chain re-signed
+
+[verify]  truncated copy, self-anchored:      chain VALID — the lie is locally perfect
+[verify]  rewritten copy, self-anchored:      chain VALID — the lie is locally perfect
+
+[verify]  truncated copy, --witness:      TRUNCATION DETECTED (exit 1)
+          witness:  TRUNCATION DETECTED — the witness recorded head 8:68ff0e9778ad… (witnessed 2026-08-09T11:07:42.436Z), but the local ledger has only 6 entries; the newest entries were dropped after being witnessed
+[verify]  rewritten copy, --witness:      FORK DETECTED (exit 1)
+[verify]  honest copy, --witness:         CONSISTENT (exit 0) — no false positives
+
+[anchor]  epoch 1 aggregate root ff43ff9ae6119db3… anchored (confirmed, mock adapter)
+[anchor]  live deployments anchor via OpenTimestamps — same interface, Bitcoin finality
+
+[certify] integrity certificate written — chain valid · sequence complete ·
+          heads match witnessed history · root anchored — disclosing entries 3 and 5 ONLY:
+          certificate: /var/folders/wv/dslzb2wx45qdqzl4dmhhg78m0000gn/T/mandare-witness-demo-Dq7weW/certificate.json
+          ledger:      gateway:demo — 8 entries, tree 8:68ff0e9778ad…
+          witnessed:   head 8:68ff0e9778ad… @ 2026-08-09T11:07:42.436Z
+          anchored:    epoch 1 via mock (confirmed)
+          disclosed:   2 entries (selective disclosure — everything else stays salted hashes)
+
+[3rd party] verifies the certificate with NO ledger access:
+            PASS  bundle-signature: certificate signed by its self-declared door key (pass an out-of-band key to bind authorship)
+            PASS  witnessed-head-signature: witness signed head 8:68ff0e9778ad… for this source
+            PASS  witnessed-consistency: certified tree (8) extends the witnessed head (8) append-only
+            PASS  disclosed-entry-seq-3: entry 3 verifiably included in the certified tree
+            PASS  disclosed-entry-seq-5: entry 5 verifiably included in the certified tree
+            PASS  witness-aggregated-head: witnessed head 8:68ff0e9778ad… is witness-signed leaf 0 of epoch 1
+            NOTE  public-anchor [recorder-attested]: anchor adapter 'mock' (confirmed) — NOT a verified public-chain proof
+            PASS  chain-valid-and-complete [recorder-attested]: the recorder's verifier reported 8 entries, chain valid, sequence gapless — re-derivable only with full-ledger access; bounded by the witnessed history above
+            certificate: VALID — every proof-backed check verified
+
+[3rd party] doctored certificate (disclosed amount edited): INVALID (exit 1)
+
+════════════════════════════════════════════════════════════════════
+ DEMO PASS: the ledger streamed salted 32-byte head fingerprints to
+ an external witness. A truncated copy and a real-door-key rewrite
+ both passed self-anchored verification — and both were CONVICTED by
+ `mandare verify --witness` against the witnessed head history. The
+ aggregate root was publicly anchored, and `mandare certify` produced
+ a selective-disclosure integrity certificate a third party verified
+ without seeing anything but the two disclosed entries.
+ Proofs, not data.
+════════════════════════════════════════════════════════════════════

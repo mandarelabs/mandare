@@ -66,7 +66,7 @@ export async function registerCardRail(
   app: FastifyInstance,
   deps: CardRailDeps
 ): Promise<CardRailStatus> {
-  const { config, ledger, policy, mandate, approvals, waivers, notifier } = deps;
+  const { config, ledger, policy, mandate, approvals, waivers, notifier, witnessGate } = deps;
   const clock = deps.clock ?? ((): Date => new Date());
   const registry =
     deps.registry ??
@@ -409,6 +409,24 @@ export async function registerCardRail(
         amountMicros: approvedMicros,
         skipLedger: replayed,
       });
+    }
+
+    // 6b. Witness-ack gating (S6, lock 5): a high-value authorization's
+    //     intent must be witnessed off-machine BEFORE Stripe hears
+    //     "approved" — the ack pins the head containing the intent entry.
+    //     No verified ack ⇒ settle the reservation to ZERO and decline
+    //     (fail-closed): a dead witness closes the card door for high-value
+    //     purchases, it never opens it. The consumed step-up waiver is spent
+    //     — after the witness recovers, the human simply approves again.
+    if (witnessGate !== undefined && witnessGate.isGated(approvedMicros, mandate)) {
+      const verdict = await witnessGate.requireAck();
+      if (!verdict.ok) {
+        const released = await settleAuthorization(reservation.entry, auth, 0);
+        if (released === null) {
+          halted = true;
+        }
+        return respond(false);
+      }
     }
 
     // 7. SETTLE: the approval decision is the act; its record must exist

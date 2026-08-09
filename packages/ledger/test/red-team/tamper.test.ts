@@ -264,7 +264,15 @@ describe('documented boundaries (closed by later sessions)', () => {
     expect(result.ok && result.entries).toBe(2);
   });
 
-  test.todo('S6: witness service streams heads off-machine and verify fetches them automatically');
+  // S6 CLOSED THIS BOUNDARY: the witness service streams heads off-machine
+  // and `mandare verify --witness` fetches them automatically. The full loop
+  // (real ledger → WitnessClient → reference witness server → truncation and
+  // real-door-key rewrite both convicted while self-anchored verification
+  // passes) is red-teamed end-to-end in
+  // packages/witness/test/red-team/witness.test.ts; the client's refusal
+  // matrix (forged/replayed acks, history conflicts) lives in
+  // packages/witness-protocol/test/client.test.ts; the Postgres driver's
+  // witnessed-head detection is below in tamper-pg.test.ts.
 });
 
 /**

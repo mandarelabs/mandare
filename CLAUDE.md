@@ -51,7 +51,9 @@ an explicit checklist item.
 | `packages/vault` | AGPL-3.0-only | Credential door: OS-keychain-backed encrypted store (`@napi-rs/keyring`), PoP scoped tokens, IETF status-list revocation |
 | `packages/gateway` | AGPL-3.0-only | Fastify LLM proxy door: auth → kill check → policy → intent entry → forward → result entry; mounts the card rail |
 | `packages/card-rail` | AGPL-3.0-only | Stripe Issuing door: mandate-checked virtual cards, real-time authorization webhook → approve/decline at the network |
-| `apps/cli` | AGPL-3.0-only | `mandare` binary (`verify`, `kill`, `reinstate`, `token`, `vault`; later `export`) |
+| `packages/witness-protocol` | Apache-2.0 | Witness wire protocol: salted head submissions, signed acks, door-side client, `Anchor` interface (OpenTimestamps), integrity-certificate build/verify |
+| `packages/witness` | AGPL-3.0-only | Reference witness server: per-source witnessed head history (consistency-enforced), aggregate Merkle tree, public anchoring, static key-directory/status-list hosting |
+| `apps/cli` | AGPL-3.0-only | `mandare` binary (`verify [--witness]`, `certify`, `witness serve`, `kill`, `reinstate`, `token`, `vault`) |
 | `scripts/` | — | license-boundary gate, smoke E2E, Claude hooks |
 
 **License import direction (enforced by `scripts/check-license-boundaries.mjs`
@@ -64,6 +66,7 @@ AGPL→Apache is fine. Shared utils go in `packages/spec`. See LICENSING.md.
 pnpm build / typecheck / lint / test   # turbo across the workspace
 pnpm red-team                          # tamper suite only (packages/ledger)
 pnpm smoke                             # walking-skeleton E2E vs mock provider
+pnpm demo:witness                      # Demo 5: the rewrite that can't hide (S6)
 node scripts/check-license-boundaries.mjs
 ```
 

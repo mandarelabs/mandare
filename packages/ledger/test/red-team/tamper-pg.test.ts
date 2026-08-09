@@ -6,8 +6,13 @@ import EmbeddedPostgres from 'embedded-postgres';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 
-import { LLM_CALL_INTENT } from '@mandarelabs/spec';
-import { verifyChain } from '@mandarelabs/verifier';
+import { LLM_CALL_INTENT, computeEntryHash, hexToBytes } from '@mandarelabs/spec';
+import {
+  computeTreeHead,
+  consistencyProof,
+  verifyChain,
+  verifyConsistency,
+} from '@mandarelabs/verifier';
 
 import { AsyncLedger } from '../../src/async-ledger.js';
 import { PgStore, provisionPgLedger } from '../../src/pg-store.js';
@@ -311,3 +316,137 @@ describe('driver parity', () => {
     expect(result.ok).toBe(true);
   });
 });
+
+describe('witnessed-head detection (S6): the superuser rewrite that cannot hide', () => {
+  /**
+   * The Q7-documented boundary made concrete: a superuser drops the
+   * triggers, doctors PG-stored history, and — holding the REAL door key —
+   * re-signs a perfectly consistent chain. Self-anchored verification
+   * passes. The witnessed head (RFC 6962 tree head recorded off-machine
+   * BEFORE the tampering, SPEC §6 lock 4) convicts both flavors. The full
+   * HTTP loop is red-teamed in packages/witness; this proves the detection
+   * math against the Postgres driver's tamper paths.
+   */
+  async function resignedRows(mutate: (entries: LedgerEntryLike[]) => LedgerEntryLike[]) {
+    const { entries } = await ledger.readAll();
+    const doctored = mutate(entries as LedgerEntryLike[]);
+    const signer = ledger.signer();
+    let prevHash = '0'.repeat(64);
+    return doctored.map((entry, index) => {
+      const { entry_hash: _h, door_signature: _s, ...rest } = entry;
+      const preimage = { ...rest, seq: index + 1, prev_hash: prevHash };
+      const entryHash = computeEntryHash(preimage as Parameters<typeof computeEntryHash>[0]);
+      prevHash = entryHash;
+      return {
+        ...preimage,
+        entry_hash: entryHash,
+        door_signature: {
+          alg: 'EdDSA',
+          key_id: signer.keyId,
+          key_provenance: signer.provenance,
+          value: Buffer.from(signer.sign(hexToBytes(entryHash))).toString('base64url'),
+        },
+      };
+    });
+  }
+
+  async function replaceChain(rows: Awaited<ReturnType<typeof resignedRows>>): Promise<string[]> {
+    const client = await adminClient();
+    await client.query('ALTER TABLE ledger_entries DISABLE TRIGGER ledger_entries_append_only');
+    const backup = await client.query<{ seq: number; entry_hash: string; prev_hash: string; entry_json: string }>(
+      'SELECT seq, entry_hash, prev_hash, entry_json FROM ledger_entries ORDER BY seq'
+    );
+    await client.query('DELETE FROM ledger_entries');
+    for (const row of rows) {
+      await client.query(
+        'INSERT INTO ledger_entries (seq, entry_hash, prev_hash, entry_json) VALUES ($1, $2, $3, $4)',
+        [row.seq, row.entry_hash, row.prev_hash, JSON.stringify(row)]
+      );
+    }
+    await client.query('ALTER TABLE ledger_entries ENABLE TRIGGER ledger_entries_append_only');
+    await client.end();
+    return backup.rows.map((row) => row.entry_json);
+  }
+
+  async function restoreChain(backupJson: string[]): Promise<void> {
+    const client = await adminClient();
+    await client.query('ALTER TABLE ledger_entries DISABLE TRIGGER ledger_entries_append_only');
+    await client.query('DELETE FROM ledger_entries');
+    for (const json of backupJson) {
+      const row = JSON.parse(json) as { seq: number; entry_hash: string; prev_hash: string };
+      await client.query(
+        'INSERT INTO ledger_entries (seq, entry_hash, prev_hash, entry_json) VALUES ($1, $2, $3, $4)',
+        [row.seq, row.entry_hash, row.prev_hash, json]
+      );
+    }
+    await client.query('ALTER TABLE ledger_entries ENABLE TRIGGER ledger_entries_append_only');
+    await client.end();
+  }
+
+  async function witnessVerdict(witnessed: {
+    size: number;
+    root: string;
+  }): Promise<'consistent' | 'truncation' | 'fork'> {
+    const hashes = await ledger.readEntryHashes();
+    const local = await computeTreeHead(hashes);
+    if (local.size < witnessed.size) return 'truncation';
+    if (local.size === witnessed.size) {
+      return local.root === witnessed.root ? 'consistent' : 'fork';
+    }
+    const proof = await consistencyProof(hashes, witnessed.size);
+    const ok = await verifyConsistency({
+      size1: witnessed.size,
+      root1: witnessed.root,
+      size2: local.size,
+      root2: local.root,
+      proof,
+    });
+    return ok ? 'consistent' : 'fork';
+  }
+
+  test('TRUNCATION-AFTER-WITNESS: self-anchored passes, witnessed head convicts', async () => {
+    const witnessed = await computeTreeHead(await ledger.readEntryHashes());
+    const rows = await resignedRows((entries) => entries.slice(0, entries.length - 2));
+    const backup = await replaceChain(rows);
+    try {
+      expect((await verifyPg()).ok).toBe(true); // the lie is locally perfect
+      expect(await witnessVerdict(witnessed)).toBe('truncation');
+    } finally {
+      await restoreChain(backup);
+    }
+  });
+
+  test('REWRITE-AFTER-WITNESS: doctored amount, re-signed — fork detected', async () => {
+    const witnessed = await computeTreeHead(await ledger.readEntryHashes());
+    const rows = await resignedRows((entries) => {
+      const doctored = [...entries];
+      doctored[1] = {
+        ...doctored[1]!,
+        cost: { ...(doctored[1]!.cost as { amount: number }), amount: 1 },
+      };
+      return doctored;
+    });
+    const backup = await replaceChain(rows);
+    try {
+      expect((await verifyPg()).ok).toBe(true);
+      expect(await witnessVerdict(witnessed)).toBe('fork');
+    } finally {
+      await restoreChain(backup);
+    }
+  });
+
+  test('honest growth after witnessing stays consistent (no false positives)', async () => {
+    const witnessed = await computeTreeHead(await ledger.readEntryHashes());
+    await ledger.append(sampleInput());
+    expect(await witnessVerdict(witnessed)).toBe('consistent');
+  });
+});
+
+interface LedgerEntryLike {
+  seq: number;
+  entry_hash: string;
+  prev_hash: string;
+  door_signature: unknown;
+  cost: unknown;
+  [key: string]: unknown;
+}

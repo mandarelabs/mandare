@@ -96,6 +96,9 @@ export function testConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfi
       webhookToleranceSeconds: 300,
       waiverTtlMs: 600_000,
     },
+    // Witness off by default: the frozen S0–S5 suites run exactly as before.
+    // Witness tests opt in via overrides + the `witness` dep.
+    witness: null,
     ...overrides,
   };
 }
@@ -119,6 +122,7 @@ export async function openTestGateway(options: {
   vault?: GatewayVault;
   notifier?: Notifier;
   nonceStore?: NonceStore;
+  witness?: GatewayDeps['witness'];
 } = {}): Promise<TestGateway> {
   const config = testConfig(options.config);
   const store = SqliteStore.open(config.ledgerDbPath);
@@ -143,6 +147,7 @@ export async function openTestGateway(options: {
     ...(options.nonceStore === undefined ? {} : { nonceStore: options.nonceStore }),
     ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
     ...(options.timeouts === undefined ? {} : { timeouts: options.timeouts }),
+    ...(options.witness === undefined ? {} : { witness: options.witness }),
   });
   return {
     app,

@@ -113,6 +113,11 @@ export interface LedgerStore {
   initMeta(rows: readonly [string, string][]): Promise<void>;
   /** All entries in seq order, JSON-parsed but UNVALIDATED (verifier's job). */
   readAllEntries(): Promise<unknown[]>;
+  /**
+   * Entry hashes only, in seq order — the witness client's read path (S6).
+   * Cheap by construction: no JSON parse, no entry contents leave the store.
+   */
+  readEntryHashes(): Promise<string[]>;
   close(): Promise<void>;
 }
 

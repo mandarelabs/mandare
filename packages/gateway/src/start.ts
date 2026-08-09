@@ -11,6 +11,7 @@ import {
 } from '@mandarelabs/ledger';
 import { MandatePolicyEngine } from '@mandarelabs/policy-engine';
 import { Vault, loadVaultConfigFromEnv } from '@mandarelabs/vault';
+import { WitnessClient } from '@mandarelabs/witness-protocol';
 
 import type { NonceStore } from '@mandarelabs/passport';
 
@@ -152,6 +153,31 @@ if (config.authMode === 'passport' && nonceStore === undefined) {
   );
 }
 
+// Witnessing (S6, locks 4–5): stream salted chain-head fingerprints to the
+// external witness and gate high-value actions on its verified ack. The
+// witness key arrives OUT-OF-BAND via env; a dead witness degrades honestly
+// (heads catch up on reconnect, high-value actions fail closed meanwhile).
+let witnessClient: WitnessClient | undefined;
+if (config.witness !== null) {
+  witnessClient = new WitnessClient({
+    url: config.witness.url,
+    signer: ledger.signer(),
+    readEntryHashes: () => ledger.readEntryHashes(),
+    witnessPublicKeyHex: config.witness.publicKeyHex,
+  });
+  let lastWitnessWarnAt = 0;
+  witnessClient.start(config.witness.streamIntervalMs, (error) => {
+    const now = Date.now();
+    if (now - lastWitnessWarnAt > 60_000) {
+      lastWitnessWarnAt = now;
+      console.warn(
+        `mandare gateway: witness sync failing (${error instanceof Error ? error.message : String(error)}) — ` +
+          'heads will catch up on reconnect; high-value actions fail closed meanwhile'
+      );
+    }
+  });
+}
+
 const pricingTable = config.pricingPath === null ? DEFAULT_PRICING : loadPricingTable(config.pricingPath);
 const app = buildGateway({
   config,
@@ -162,6 +188,7 @@ const app = buildGateway({
   ...(gatewayVault === undefined ? {} : { vault: gatewayVault }),
   ...(notifier === undefined ? {} : { notifier }),
   ...(nonceStore === undefined ? {} : { nonceStore }),
+  ...(witnessClient === undefined ? {} : { witness: witnessClient }),
 });
 
 const tokenAuth =
@@ -206,9 +233,17 @@ console.log(
         }`
   }`
 );
+console.log(
+  `  witness: ${
+    config.witness === null
+      ? 'off (heads stay local — truncation detectable only via a recorded --prev-head)'
+      : `ON — streaming to ${config.witness.url} (ack mode: ${config.witness.ackMode})`
+  }`
+);
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
+    witnessClient?.stop();
     void app.close().then(async () => {
       await ledger.close();
       vault?.close();

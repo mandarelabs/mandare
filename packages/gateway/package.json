@@ -34,11 +34,13 @@
     "@mandarelabs/policy-engine": "workspace:*",
     "@mandarelabs/spec": "workspace:*",
     "@mandarelabs/vault": "workspace:*",
+    "@mandarelabs/witness-protocol": "workspace:*",
     "@sinclair/typebox": "^0.34.0",
     "fastify": "^5.0.0"
   },
   "devDependencies": {
     "@mandarelabs/verifier": "workspace:*",
+    "@mandarelabs/witness": "workspace:*",
     "vitest": "^3.0.0"
   }
 }

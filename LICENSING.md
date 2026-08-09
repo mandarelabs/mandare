@@ -13,6 +13,7 @@ gateways, frameworks, and verifier tools.
 | `@mandarelabs/policy-engine` | `packages/policy-engine` | Designed for embedding in third-party gateways and agent frameworks. |
 | `@mandarelabs/verifier` | `packages/verifier` | Anyone must be able to verify a Mandare ledger — including parties who distrust us. |
 | `@mandarelabs/passport` | `packages/passport` | Passports, delegation credentials, and RFC 9421 request signatures must be verifiable by any relying party — including parties who distrust us. |
+| `@mandarelabs/witness-protocol` | `packages/witness-protocol` | The witness wire protocol, client, anchoring interface, and integrity-certificate verification must be inspectable and embeddable by anyone — including parties who distrust us. |
 
 Planned Apache-2.0 packages (not yet created): `packages/sdk-ts`, `packages/sdk-py`.
 
@@ -22,7 +23,7 @@ Each Apache package carries its own `LICENSE` and `NOTICE` file and declares
 ## AGPL-3.0-only packages
 
 Everything not listed above, currently: `packages/ledger`, `packages/gateway`,
-`packages/vault`, `apps/cli`.
+`packages/vault`, `packages/card-rail`, `packages/witness`, `apps/cli`.
 
 ## Import direction (enforced)
 

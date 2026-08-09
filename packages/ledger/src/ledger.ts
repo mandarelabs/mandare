@@ -80,6 +80,19 @@ export class Ledger {
     return row === undefined ? null : { seq: row.seq, entry_hash: row.entry_hash };
   }
 
+  /** Entry hashes in seq order — the witness client's content-free read path (S6). */
+  entryHashes(): string[] {
+    const rows = this.db
+      .prepare('SELECT entry_hash FROM ledger_entries ORDER BY seq ASC')
+      .all() as { entry_hash: string }[];
+    return rows.map((row) => row.entry_hash);
+  }
+
+  /** The door key as a signing surface (witness submissions, S6). */
+  signer(): DoorKey {
+    return this.doorKey;
+  }
+
   close(): void {
     this.db.close();
   }

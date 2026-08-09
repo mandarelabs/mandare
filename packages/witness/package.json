@@ -1,0 +1,39 @@
+{
+  "name": "@mandarelabs/witness",
+  "version": "0.1.0",
+  "description": "Mandare reference witness server: records salted chain-head fingerprints per source, aggregates them into one anchored Merkle tree, serves witnessed-head lookups and signed acks",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.test.json --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "red-team": "vitest run test/red-team"
+  },
+  "dependencies": {
+    "@mandarelabs/ledger": "workspace:*",
+    "@mandarelabs/spec": "workspace:*",
+    "@mandarelabs/verifier": "workspace:*",
+    "@mandarelabs/witness-protocol": "workspace:*",
+    "fastify": "^5.0.0"
+  },
+  "devDependencies": {
+    "vitest": "^3.0.0"
+  }
+}

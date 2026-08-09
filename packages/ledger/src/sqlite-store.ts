@@ -213,6 +213,13 @@ export class SqliteStore implements LedgerStore {
     return Promise.resolve(rows.map((row) => JSON.parse(row.entry_json) as unknown));
   }
 
+  readEntryHashes(): Promise<string[]> {
+    const rows = this.db
+      .prepare('SELECT entry_hash FROM ledger_entries ORDER BY seq ASC')
+      .all() as { entry_hash: string }[];
+    return Promise.resolve(rows.map((row) => row.entry_hash));
+  }
+
   close(): Promise<void> {
     this.db.close();
     return Promise.resolve();

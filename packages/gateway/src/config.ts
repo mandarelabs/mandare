@@ -99,6 +99,27 @@ export interface GatewayConfig {
     /** How long a granted step-up waiver stays redeemable (ms). */
     waiverTtlMs: number;
   };
+  /**
+   * Witnessing (S6, SPEC §6 locks 4–5). null = no witness: the ledger stays
+   * local-only tamper-evident (the documented S0–S5 posture), and witness-ack
+   * gating is off. When configured, the witness PUBLIC KEY is mandatory —
+   * nothing a witness says is trusted unverified.
+   */
+  witness: {
+    url: string;
+    /** Raw Ed25519 witness public key, hex, obtained OUT-OF-BAND. */
+    publicKeyHex: string;
+    /**
+     * 'threshold': actions above the mandate's approval threshold wait for a
+     * verified witness ack before executing (lock 5 — the mandate-defined
+     * high-value set gets a zero tamper window). 'all': every action waits.
+     * 'off': stream heads only (lock 4 without lock 5).
+     */
+    ackMode: 'off' | 'threshold' | 'all';
+    ackTimeoutMs: number;
+    /** Background head-streaming cadence (lock 4). */
+    streamIntervalMs: number;
+  } | null;
 }
 
 const DEFAULT_PORT = 8484;
@@ -109,6 +130,8 @@ const DEFAULT_NTFY_URL = 'https://ntfy.sh';
 const DEFAULT_STRIPE_API_BASE = 'https://api.stripe.com';
 const DEFAULT_WEBHOOK_TOLERANCE_SECONDS = 300;
 const DEFAULT_CARD_WAIVER_TTL_MS = 10 * 60_000;
+const DEFAULT_WITNESS_ACK_TIMEOUT_MS = 1_500;
+const DEFAULT_WITNESS_STREAM_INTERVAL_MS = 1_000;
 
 function stripSlashes(url: string): string {
   return url.replace(/\/+$/, '');
@@ -237,7 +260,63 @@ export function loadConfigFromEnv(env: Record<string, string | undefined>): Gate
       webhookToleranceSeconds: parseWebhookTolerance(env.STRIPE_WEBHOOK_TOLERANCE_SECONDS),
       waiverTtlMs: parseWaiverTtl(env.MANDARE_CARD_WAIVER_TTL_MS),
     },
+    witness: parseWitnessConfig(env),
   };
+}
+
+function parseWitnessConfig(
+  env: Record<string, string | undefined>
+): GatewayConfig['witness'] {
+  const url = env.MANDARE_WITNESS_URL;
+  const modeRaw = env.MANDARE_WITNESS_ACK_MODE;
+  if (url === undefined || url === '') {
+    // Asking for gating without a witness is a misconfiguration — refuse
+    // loudly rather than silently running ungated (fail-closed, R1).
+    if (modeRaw !== undefined && modeRaw !== '' && modeRaw !== 'off') {
+      throw new Error(
+        `MANDARE_WITNESS_ACK_MODE=${modeRaw} requires MANDARE_WITNESS_URL — no witness, no gating`
+      );
+    }
+    return null;
+  }
+  const publicKeyHex = env.MANDARE_WITNESS_PUBLIC_KEY;
+  if (publicKeyHex === undefined || !/^[0-9a-f]{64}$/.test(publicKeyHex)) {
+    throw new Error(
+      'MANDARE_WITNESS_URL is set but MANDARE_WITNESS_PUBLIC_KEY is missing/malformed — ' +
+        'the witness key must arrive out-of-band (64 lowercase hex chars); refusing to trust an unverifiable witness'
+    );
+  }
+  const mode = modeRaw === undefined || modeRaw === '' ? 'threshold' : modeRaw;
+  if (mode !== 'off' && mode !== 'threshold' && mode !== 'all') {
+    throw new Error(
+      `invalid MANDARE_WITNESS_ACK_MODE: ${mode} (expected 'off', 'threshold', or 'all')`
+    );
+  }
+  const ackTimeoutMs =
+    env.MANDARE_WITNESS_ACK_TIMEOUT_MS === undefined || env.MANDARE_WITNESS_ACK_TIMEOUT_MS === ''
+      ? DEFAULT_WITNESS_ACK_TIMEOUT_MS
+      : Number(env.MANDARE_WITNESS_ACK_TIMEOUT_MS);
+  if (!Number.isInteger(ackTimeoutMs) || ackTimeoutMs < 50) {
+    throw new Error('invalid MANDARE_WITNESS_ACK_TIMEOUT_MS: must be an integer ≥ 50');
+  }
+  return {
+    url: stripSlashes(url),
+    publicKeyHex,
+    ackMode: mode,
+    ackTimeoutMs,
+    streamIntervalMs: parseStreamInterval(env.MANDARE_WITNESS_STREAM_INTERVAL_MS),
+  };
+}
+
+function parseStreamInterval(raw: string | undefined): number {
+  if (raw === undefined || raw === '') {
+    return DEFAULT_WITNESS_STREAM_INTERVAL_MS;
+  }
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 100) {
+    throw new Error('invalid MANDARE_WITNESS_STREAM_INTERVAL_MS: must be an integer ≥ 100');
+  }
+  return value;
 }
 
 function parseWebhookTolerance(raw: string | undefined): number {

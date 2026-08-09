@@ -78,3 +78,10 @@ jobs:
       # `mandare kill` turns the card to dead plastic. Mock Stripe, REAL
       # webhook signatures, no secrets.
       - run: pnpm demo:card
+      # The S6 acceptance demo (R7): the rewrite that can't hide — heads
+      # streamed to the reference witness, a truncated copy and a real-door-
+      # key rewrite both pass self-anchored verification and both are
+      # CONVICTED by `mandare verify --witness`; `mandare certify` emits a
+      # selective-disclosure integrity certificate a third party verifies
+      # with no ledger access. Real witness server, mock anchor, no secrets.
+      - run: pnpm demo:witness

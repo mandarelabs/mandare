@@ -81,6 +81,17 @@ export interface CardRailConfig {
   cardholderId: string | null;
 }
 
+/**
+ * Witness-ack gating (S6, lock 5), provided by the mounting door — the
+ * gateway passes its WitnessGate. A gated authorization must obtain a
+ * verified off-machine ack of its intent entry BEFORE Stripe hears
+ * "approved"; no ack ⇒ decline (fail-closed). Structural so tests fake it.
+ */
+export interface CardWitnessGate {
+  isGated(amountMicros: number, mandate: MandateV1): boolean;
+  requireAck(): Promise<{ ok: true; witnessedSize: number } | { ok: false; reason: string }>;
+}
+
 export interface CardRailDeps {
   config: CardRailConfig;
   ledger: CardLedgerWriter;
@@ -93,6 +104,8 @@ export interface CardRailDeps {
   notifier?: CardNotifier;
   waivers: WaiverStore;
   authenticateCreate: CreateAuthenticator;
+  /** Absent ⇒ no witness gating (the S0–S5 posture; lock 5 not in force). */
+  witnessGate?: CardWitnessGate;
   /** Test override; defaults to a registry rebuilt from the ledger. */
   registry?: CardRegistry;
   clock?: () => Date;

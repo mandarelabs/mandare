@@ -994,7 +994,277 @@ regression/red-team tests:
 
 ---
 
-## → S6 handoff (witnessing + anchoring)
+## S6 — Witnessing + public anchoring (2026-08-09)
+
+**Scope (per S5 handoff + SPEC §6 locks 4–5, §9.4):** the open witness
+protocol + door client · a public reference witness server · public
+anchoring behind an `Anchor` interface (OpenTimestamps) · witness-ack gating
+(lock 5) on both rails · `mandare verify --witness` + `mandare certify` ·
+Demo 5 "the rewrite that can't hide" · red-team + honest-degradation docs.
+
+**Status: complete.** All exit criteria met: everything test-proven; Demo 5
+scripted + captured + in CI; red-team green on SQLite AND Postgres; the
+witness-ack path benchmarked (p50 ~15ms / p99 ~29ms per gated ack over a
+500+ entry ledger — ~68× under Stripe's 2s budget at p99); Code Reviewer
+pass done (2 HIGH + 3 MEDIUM + LOWs, ALL actionable ones fixed same session);
+full local gate green (build/typecheck/lint+license/test/red-team/smoke/
+demo×5). S0–S5 red-team floor and Demos 1–4 frozen and green. `packages/spec`
+untouched (R6). Point restated at the top of the session and honored:
+**self-anchored verification proves consistency, not authorship, and
+truncation was the open boundary since S0 — witnessing closes both while
+Mandare-the-company never sees ledger contents.**
+
+### Done
+
+- **`packages/witness-protocol`** (Apache-2.0, the inspectable/embeddable
+  surface) — everything a party needs to SPEAK or CHECK the protocol without
+  trusting us:
+  - **Content-free wire** (`messages.ts`): a submission is `{size, 32-byte
+    RFC 6962 root}` over entry hashes whose preimages carry a random 16-byte
+    salt — the witness learns THAT a ledger grew, never WHAT it recorded. All
+    schemas `additionalProperties:false`, bounded. Boundary parsers (R4).
+  - **Self-authenticating sources**: `source_id = sha256(door pubkey)`; every
+    submission Ed25519-signed over `sha256(canonicalJson(payload))` — one
+    signing rule shared with ledger entries (`signing.ts`).
+  - **Door client** (`client.ts`): streams heads per-entry/second, catches up
+    after offline gaps in ONE consistency-proven sync (no literal queue — the
+    tree commits to every prior entry), verifies every ack against an
+    OUT-OF-BAND witness key. `fetchVerifiedWitnessedHead` is the standalone
+    read used by verify/certify.
+  - **Anchoring aggregate** (`aggregate.ts`): one RFC 6962 tree over all
+    sources' latest witnessed heads; per-source inclusion proofs reveal
+    hashes only. Epochs are witness-signed (`signEpochSummary`/
+    `verifyEpochSummary`) so a relying party can't be handed a fabricated
+    aggregate (review H2).
+  - **`Anchor` interface** (`anchor.ts`, Q6): `OpenTimestampsAnchor` (live),
+    `MockAnchor` (CI/demos — its receipt says loudly it is NOT public),
+    `BaseAnchor` (declared future EVM stub, not built). `ots.ts` is a
+    HAND-ROLLED minimal OpenTimestamps client — the npm `opentimestamps`
+    0.4.9 drags in `request`/`bitcore-lib`/`bytebuffer`/the placeholder `fs`,
+    exactly the surface Q24 refuses; the emitted `.ots` bytes stay verifiable
+    by stock OTS clients. Parse bounds on every varuint/varbytes/depth/node.
+  - **Integrity certificate** (`certificate.ts`, SPEC §9.4): build + verify.
+    Third-party verification re-derives every proof-basis check (bundle
+    signature, witnessed-head signature, witnessed consistency incl. the
+    truncation direction, disclosed-entry hash+signature+inclusion,
+    witness-signed aggregate inclusion) and labels the two claims it can't
+    re-derive without the full ledger as `recorder-attested`; public-chain
+    finality is `proof` ONLY on a verified Bitcoin attestation.
+- **`packages/witness`** (AGPL) — the reference server, single-tenant, open,
+  self-hostable (SPEC §3.2). Records per-source witnessed head history
+  (consistency-ENFORCED on every submission — a rewrite is refused at
+  submission time, not just detected later), aggregates + anchors, serves
+  witnessed-head lookups + signed acks + witness-signed epoch inclusion, and
+  hosts the S1 key directory + S3 status list as static JSON (closing that
+  debt). Witness storage gets the ledger's posture: heads/sources
+  append-only, epoch commitments immutable, the anchor receipt may only
+  progress none→pending→confirmed and is frozen once confirmed (triggers).
+  **The multi-tenant commercial witness is explicitly OUT of this repo** and
+  speaks the same wire.
+- **Witness-ack gating (lock 5)** — `packages/gateway/src/witness-gate.ts`
+  wired into the LLM path (after the intent reservation, before execution)
+  and the card path (`routes.ts` step 6b, before Stripe hears "approved").
+  `ackMode: 'threshold'` reuses the mandate's approval rules as the
+  high-value set (no second threshold vocabulary); no verified ack within
+  the timeout ⇒ the reservation settles to ZERO and the action is refused
+  (R1/R3). A dead witness closes high-value doors, never opens one, never
+  blocks `mandare kill`. Streaming nudges on every append (lock 4). Config in
+  `config.ts` (`MANDARE_WITNESS_*`), fail-closed on misconfiguration (gating
+  without a URL, URL without an out-of-band key, client missing when
+  configured — all refuse loudly).
+- **CLI** (`apps/cli`): `mandare verify --witness <url> --witness-key <hex>`
+  (TRUNCATION/FORK/CONSISTENT/UNAVAILABLE, exit 1 on anything but consistent);
+  `mandare certify [--disclose …]` + `mandare certify verify <file>`;
+  `mandare witness serve` (runs the reference witness, prints its public key
+  for out-of-band distribution, OTS/mock anchor, optional directory/status
+  hosting).
+- **Demo 5** (`scripts/demo-witness.mjs`, `pnpm demo:witness`, CI job): heads
+  streamed to the REAL `mandare witness serve` child process; a truncated
+  copy and a real-door-key rewrite both pass self-anchored verification and
+  both are CONVICTED by `mandare verify --witness`; the aggregate root is
+  anchored; `mandare certify` emits a 2-of-8 selective-disclosure certificate
+  a third party verifies with no ledger access; a doctored certificate is
+  INVALID. ASSERTS everything (R7). Capture:
+  `docs/demos/S6-witness-demo.txt`.
+- **Red-team additions** (green on both drivers): truncation-after-witness +
+  rewrite-after-witness (real-door-key, self-anchored-passes → witnessed-head
+  convicts) on SQLite (`packages/witness`) AND Postgres (`tamper-pg.test.ts`);
+  forged/replayed acks + history conflicts (`witness-protocol/client.test`);
+  cross-source forgery, split-view, replay-rollback, salt-dictionary attack,
+  aggregate inclusion-proof forgery, witness-storage mutation +
+  anchor-regression (`packages/witness/test/red-team`); witness-unavailable
+  fail-safe on both rails, threshold-mode async window, approve-then-
+  witness-down still fails closed (`gateway`/`card-rail` red-team); certify
+  refuses truncation/fork at build time (`apps/cli`). The S0 witness
+  `test.todo` is retired with a pointer to the closing tests.
+- **Docs**: `docs/WITNESSING.md` (architecture, detection, gating, anchoring,
+  certificate, and the honest residuals stated plainly). Package CLAUDE.md ×2,
+  root CLAUDE.md map + commands, LICENSING.md, `.env.example` witness block.
+
+### Decisions (S6 latitude; BUILD-DECISIONS untouched)
+
+1. **Public reference witness in THIS repo; commercial multi-tenant witness
+   in the future private repo** (the S5 handoff default; the founder did not
+   rule otherwise). The protocol + verification are Apache so distrusting
+   parties can embed them; the reference server is AGPL.
+2. **Hand-rolled OTS client** (like RFC 6962/did:key/Stripe-signature before
+   it): the `opentimestamps` npm client's dependency tree violates the Q24
+   supply-chain posture. ~450 lines with a full adversarial parse-bound test
+   surface; the `.ots` artifact stays portable. Logged as a Q6-letter
+   deviation, same spirit (the interface + the format are honored).
+3. **Witness-ack gating reuses the mandate approval threshold** as its
+   definition of high-value — one threshold vocabulary, set by the human who
+   signed the mandate, not a second knob.
+4. **Epochs are witness-signed** (added during the review pass): the
+   certificate's anchoring claim must rest on a witness-attested aggregate,
+   not a certificate-self-declared one.
+5. **The certificate verdict gates on PROOF-basis checks only**;
+   recorder-attested checks (chain validity needs the full ledger; public
+   anchoring may be legitimately pending) are reported honestly and never
+   silently pass — the project's honesty rule, in code.
+
+### Deviations from BUILD-DECISIONS
+
+None. (Q6 OpenTimestamps daily anchoring behind an `Anchor` interface, with
+Base/EVM as a declared stub — honored; the hand-rolled client is a
+same-spirit deviation from Q6's "vendor the npm client" letter, logged above
+under decision 2 and in `packages/witness-protocol/CLAUDE.md`.)
+
+### Review pass (Code Reviewer subagent, full S6 diff)
+
+2 HIGH + 3 MEDIUM + LOWs. Core security explicitly confirmed clean:
+content-free wire, source self-authentication, consistency-enforced witness
+history (incl. the async-verification TOCTOU closed by `appendHead`'s
+BEGIN IMMEDIATE re-check), verified acks, fail-closed gating on both rails,
+OTS parse bounds, canonical-JSON signing, and the R5 suites (non-tautological,
+S0–S5 floor untouched). Fixed same session with regression/red-team tests:
+
+- **(HIGH-1)** the certificate verifier never bound
+  `door_key_id == sha256(door_public_key)` — self-declared mode let an
+  attacker name a victim's `source_id` while signing with their own key and
+  mint a "VALID" certificate over the victim's witnessed, anchored history.
+  Now the invariant is checked; impersonation forces the victim's key, at
+  which point the bundle signature fails. Red-team case added.
+- **(HIGH-2)** the anchored-head check trusted attacker-chosen epoch data
+  (the `EpochSummary` carried no signature) and the mock/unknown-adapter
+  branch claimed `basis:'proof'` for public anchoring that wasn't. Now the
+  witness SIGNS every served epoch and the verifier checks it; the check
+  splits into `witness-aggregated-head` (proof) and `public-anchor` (proof
+  ONLY on a verified Bitcoin attestation; pending/mock reported as NOTE,
+  never overclaimed). The verdict gates on proof-basis checks. Red-team case.
+- **(MEDIUM-3)** unknown OTS attestation payloads were dropped
+  (`payload.bytes(0)`), corrupting re-serialized receipts for
+  litecoin/ethereum-style tags. `ByteReader.rest()` keeps the full opaque
+  payload; round-trip test added.
+- **(MEDIUM-4)** epoch anchor columns could regress (confirmed→none, receipt
+  nulled) without tripping a trigger — a witness-DB attacker could erase
+  anchoring evidence. New `witness_epochs_anchor_progress` trigger; red-team
+  assertions for both the refused regressions and the one legal progression.
+- **(MEDIUM-5)** `certify` embedded a consistency proof in the `size <
+  witnessed` case without verifying it, shipping a doomed certificate for a
+  prefix-rewritten-then-grown ledger. It now runs `verifyConsistency` and
+  REFUSES a fork at build time (main path + `fetchAnchorInclusion`). Red-team
+  cases (truncation + fork) added in `apps/cli`.
+- **(LOWs fixed)** 409 `NOT_CONSISTENT` surfaces as `HISTORY_CONFLICT` not a
+  misleading "moving head" (L7); non-JSON witness bodies raise `BAD_ACK` not a
+  raw `SyntaxError` (L9); `revocation.lst`/`ots_base64` gained `maxLength`
+  bounds (L11); the 503 witness reason to the (hostile) agent is now generic,
+  detail server-side only (L12); a size-0 first head must carry the empty-tree
+  root or it's a 400 (L13); the concurrent-move 409 re-reads the head for its
+  body (L8); `--anchor-interval-hours 0|off` selects on-demand-only anchoring
+  (L6, dead branch made reachable).
+- **(LOW recorded, not actioned)** per-sync O(n) tree recompute is
+  milliseconds at today's scale; an incremental/persistent Merkle state is
+  the S7+ fix before large fleets (see handoff).
+
+### Known debt (intentional, scheduled)
+
+- **Per-sync O(n) tree recompute** (client streaming + gated acks): fine at
+  hundreds/thousands of entries (benched); at 10^5–10^6 a persistent
+  incremental Merkle state is warranted before the 1.5s ack timeout starts
+  eating tree computation. S7+.
+- **Second-witness redundancy** is protocol-permitted (a door can stream to N
+  witnesses) but not wired into config — a single malicious witness can
+  refuse service (⇒ high-value fail closed) but cannot forge or rewrite.
+  Documented in WITNESSING.md; a multi-witness config knob is S7+.
+- **OpenTimestamps live-smoke** (real calendars → real `.ots` → real Bitcoin
+  upgrade) is not in CI (network + hours-to-confirm). The adapter is
+  unit-tested against faked calendar responses end to end; a local
+  `witness-live-smoke` against the public calendar pool is a founder-run
+  check, like the card live-smoke.
+- Still pending from S3: wiring OpenRouter `disableKey` into `mandare kill`.
+
+---
+
+## → S7 handoff (packaging + distribution)
+
+The accountability stack is functionally complete: Passport (WHO) · Mandate +
+approvals (MAY) · Ledger + spend/revocation projections (DID) · vault + kill
+(hard enforcement) · card rail (money) · witnessing + anchoring + integrity
+certificate (proof). S7 is **packaging it so people can actually run it** —
+BUILD-DECISIONS Q17/Q18/Q26/Q29 are the rulebook. Read the S6 decisions above
+and SPEC §3.1 (SDKs & integrations), §11 (packaging), §12 (deployment modes).
+
+Scope for S7:
+
+1. **MCP server** (`@modelcontextprotocol/sdk` v1.x, Q17): a stdio server
+   exposing the door as MCP tools (issue mandate/passport/token, verify,
+   certify, kill, witness status). Auth via env for stdio. `server.json` +
+   `mcp-publisher`, namespace `com.mandare/*` (or `io.github.*` pre-domain).
+   The gateway/vault/ledger are already the right shape — MCP is a thin
+   adapter over the CLI/library surface, not new logic.
+2. **OpenClaw native skill** (Q18 — MCP alone is NOT sufficient, OpenClaw has
+   no native MCP client): `SKILL.md` (AgentSkills spec) + `metadata.openclaw`
+   block shelling to the `mandare` CLI. ClawHub trust envelope +
+   published release hashes.
+3. **`docker compose up` self-host** (SPEC §11, Q29): gateway + a Postgres
+   (team mode) + the reference witness in one compose file; a one-line solo
+   installer. This is the README's "3-command quickstart".
+4. **Dashboard-lite** (Next.js App Router, Q28): read-only fleet view over
+   the ledger — spend trail, kill state, witnessed-head status, certificate
+   export button. "Blind hosting" (E2E) is post-MVP; start local-only.
+5. **Docs site** (Fumadocs, Q26): the WITNESSING.md/CARD-RAIL.md/KEY-DIRECTORY.md
+   content plus a getting-started, threat model, and the standards-mapping
+   table (SPEC §10). Feeds the launch (Q29 playbook).
+6. **Release mechanics** (Q24): npm Trusted Publishing (OIDC, provenance) for
+   the Apache packages (`spec`, `policy-engine`, `verifier`, `passport`,
+   `witness-protocol`); cosign-keyless + SLSA for the Docker images;
+   `REPRODUCING.md` already sets the honest bar. Wire `release.yml` (the S0
+   stub) to actually publish.
+
+Inherit from S6:
+
+- **Witnessing is an ADDITIONAL channel, never the authority** (S3 founder
+  ruling, honored): a dead witness fails high-value actions closed but never
+  blocks `mandare kill` or ungated calls. Keep that invariant in the MCP/
+  compose wiring — the witness is a separate service, and the door degrades
+  honestly without it.
+- **The protocol + verification stay Apache and inspectable.** The MCP server
+  and dashboard are AGPL doors; anything a distrusting relying party must run
+  (verifier, passport, witness-protocol, certificate check) stays embeddable.
+- **Keep BOTH red-team drivers green** (now includes the S6 witness suites)
+  and every demo (now five) in CI. Any new packaging surface adds its own
+  smoke, not a weakening of an existing gate.
+
+**From the founder — needed for S7 (decisions, not blocking S7 start):**
+
+- **Namespace + domain for MCP/npm publishing**: confirm `com.mandare/*` (DNS
+  verification against `mandare.dev`/`mandarelabs.com`) vs `io.github.*` for
+  the pre-domain window.
+- **OpenTimestamps live-smoke**: run `pnpm` (once the `witness-live-smoke`
+  script lands in S7) against the public calendar pool from a networked
+  machine, then check the `.ots` upgraded to a Bitcoin attestation after a
+  few hours — confirms the real anchoring path end to end.
+- **Still open from S5**: enable Issuing on the Stripe TEST account for the
+  card live-smoke (one dashboard click); set the Issuing webhook timeout
+  default to DECLINE once real cards exist.
+- **Still open from S3**: the OpenRouter `disableKey` belt into `mandare kill`
+  (needs the per-agent key-hash map; the local authority is complete without
+  it).
+
+---
+
+## → S6 handoff (witnessing + anchoring) — ORIGINAL (fulfilled — see the S6 log above)
 
 Read SPEC §6 (witnessing = lock 4/5), the S1 key-directory design
 (docs/KEY-DIRECTORY.md), and the S3 founder ruling (witness = ADDITIONAL

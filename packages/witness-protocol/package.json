@@ -1,0 +1,38 @@
+{
+  "name": "@mandarelabs/witness-protocol",
+  "version": "0.1.0",
+  "description": "Mandare witness protocol: salted chain-head submissions, signed acks, aggregate anchoring, and integrity certificates — inspectable and verifiable by anyone, including parties who distrust us",
+  "license": "Apache-2.0",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.test.json --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@mandarelabs/spec": "workspace:*",
+    "@mandarelabs/verifier": "workspace:*",
+    "@sinclair/typebox": "^0.34.0"
+  },
+  "devDependencies": {
+    "vitest": "^3.0.0"
+  }
+}

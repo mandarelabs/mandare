@@ -47,6 +47,12 @@ importers:
       '@mandarelabs/verifier':
         specifier: workspace:*
         version: link:../../packages/verifier
+      '@mandarelabs/witness':
+        specifier: workspace:*
+        version: link:../../packages/witness
+      '@mandarelabs/witness-protocol':
+        specifier: workspace:*
+        version: link:../../packages/witness-protocol
     devDependencies:
       vitest:
         specifier: ^3.0.0
@@ -94,6 +100,9 @@ importers:
       '@mandarelabs/vault':
         specifier: workspace:*
         version: link:../vault
+      '@mandarelabs/witness-protocol':
+        specifier: workspace:*
+        version: link:../witness-protocol
       '@sinclair/typebox':
         specifier: ^0.34.0
         version: 0.34.52
@@ -104,6 +113,9 @@ importers:
       '@mandarelabs/verifier':
         specifier: workspace:*
         version: link:../verifier
+      '@mandarelabs/witness':
+        specifier: workspace:*
+        version: link:../witness
       vitest:
         specifier: ^3.0.0
         version: 3.2.7(@types/node@22.20.1)
@@ -190,6 +202,44 @@ importers:
       '@mandarelabs/spec':
         specifier: workspace:*
         version: link:../spec
+    devDependencies:
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.7(@types/node@22.20.1)
+
+  packages/witness:
+    dependencies:
+      '@mandarelabs/ledger':
+        specifier: workspace:*
+        version: link:../ledger
+      '@mandarelabs/spec':
+        specifier: workspace:*
+        version: link:../spec
+      '@mandarelabs/verifier':
+        specifier: workspace:*
+        version: link:../verifier
+      '@mandarelabs/witness-protocol':
+        specifier: workspace:*
+        version: link:../witness-protocol
+      fastify:
+        specifier: ^5.0.0
+        version: 5.10.0
+    devDependencies:
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.7(@types/node@22.20.1)
+
+  packages/witness-protocol:
+    dependencies:
+      '@mandarelabs/spec':
+        specifier: workspace:*
+        version: link:../spec
+      '@mandarelabs/verifier':
+        specifier: workspace:*
+        version: link:../verifier
+      '@sinclair/typebox':
+        specifier: ^0.34.0
+        version: 0.34.52
     devDependencies:
       vitest:
         specifier: ^3.0.0

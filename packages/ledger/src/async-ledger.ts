@@ -98,6 +98,21 @@ export class AsyncLedger {
     return this.store.head();
   }
 
+  /** Entry hashes in seq order — the witness client's content-free read path (S6). */
+  readEntryHashes(): Promise<string[]> {
+    return this.store.readEntryHashes();
+  }
+
+  /**
+   * The door key as a signing surface (S6 witness submissions are signed by
+   * the same key that signs entries — one door identity, on-ledger and
+   * off-machine). Exposes sign/public material only; private bytes stay
+   * inside the KeyObject.
+   */
+  signer(): DoorKey {
+    return this.doorKey;
+  }
+
   /** Meta + unvalidated entries, for verification (same contract as readLedger). */
   async readAll(): Promise<{ meta: LedgerMeta; entries: unknown[] }> {
     const rows = await this.store.readMetaRows();

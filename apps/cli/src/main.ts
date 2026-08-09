@@ -1,10 +1,12 @@
 #!/usr/bin/env node
+import { runCertify, runCertifyVerify } from './certify.js';
 import { buildDirectory } from './directory.js';
 import { runKill, runReinstate } from './kill.js';
 import { runMandateIssue, runPassportIssue } from './passport-cmd.js';
 import { runTokenIssue } from './token.js';
 import { runVaultImportEnv, runVaultList } from './vault-cmd.js';
 import { parsePrevHead, runVerify, type VerifyOptions } from './verify.js';
+import { runWitnessServe } from './witness-cmd.js';
 
 const USAGE = `mandare — the accountability stack for AI agent fleets
 
@@ -22,9 +24,36 @@ Usage:
       --spend                   spend trail (intents, settlements, REFUSED
                                 reservations) + budget-counter invariant check
                                 (counters must equal a fresh ledger replay)
+      --witness <url>           check the chain against the externally
+                                witnessed head history — catches truncation
+                                and rewrites that self-anchored verification
+                                cannot. Requires --witness-key.
+      --witness-key <hex>       the witness's raw Ed25519 public key (64 hex),
+                                obtained OUT-OF-BAND
       --json                    machine-readable output
       Without --door-key/--key-directory, verification is self-anchored: it
       proves internal consistency, not authorship.
+
+  mandare certify --db <path> --witness <url> --witness-key <hex>
+                  [--disclose <seq,seq,...>] [--out <path>] [--json]
+      Emit the integrity certificate (SPEC §9.4): chain valid · sequence
+      complete · heads match the witnessed history · root publicly anchored —
+      over owner-SELECTED entries with inclusion proofs. Undisclosed entries
+      stay salted hashes. Signed by the door key.
+
+  mandare certify verify <file> --witness-key <hex> [--door-key <hex>] [--json]
+      Third-party check of a certificate: NO ledger access needed. Every
+      proof-backed check is re-derived; recorder-attested claims are labeled.
+
+  mandare witness serve [--db <path>] [--host 127.0.0.1] [--port 9411]
+                        [--key <pem>] [--anchor ots|mock]
+                        [--anchor-interval-hours <n>]
+                        [--serve-directory <path>] [--serve-status-list <path>]
+      Run the open reference witness server: records salted chain-head
+      fingerprints per source (zero ledger content), refuses non-append-only
+      submissions, aggregates all sources into one Merkle tree, anchors the
+      root via OpenTimestamps. Prints its public key for out-of-band
+      distribution. Optionally hosts the key directory + IETF status list.
 
   mandare kill <agent> [--reason <text>]
   mandare kill --mandate <id> [--reason <text>]
@@ -187,6 +216,18 @@ async function runVerifyCommand(flags: ParsedArgs['flags']): Promise<number> {
   if (flags.has('spend')) {
     options.spend = true;
   }
+  const witnessUrl = getString(flags, 'witness');
+  const witnessKey = getString(flags, 'witness-key');
+  if (witnessUrl !== undefined) {
+    if (witnessKey === undefined || !/^[0-9a-f]{64}$/.test(witnessKey)) {
+      throw new UsageError(
+        '--witness requires --witness-key <64 lowercase hex chars> (the witness public key, out-of-band)'
+      );
+    }
+    options.witness = { url: witnessUrl.replace(/\/+$/, ''), publicKeyHex: witnessKey };
+  } else if (witnessKey !== undefined) {
+    throw new UsageError('--witness-key requires --witness <url>');
+  }
 
   const output = await runVerify(db, options);
   if (flags.has('json')) {
@@ -339,6 +380,103 @@ function runTokenCommand(args: ParsedArgs): number {
   });
 }
 
+async function runCertifyCommand(args: ParsedArgs): Promise<number> {
+  const flags = args.flags;
+  if (args.positionals[0] === 'verify') {
+    const file = args.positionals[1];
+    if (file === undefined) {
+      throw new UsageError('certify verify requires a certificate file path');
+    }
+    const witnessKey = getString(flags, 'witness-key');
+    if (witnessKey === undefined || !/^[0-9a-f]{64}$/.test(witnessKey)) {
+      throw new UsageError('certify verify requires --witness-key <64 hex chars> (out-of-band)');
+    }
+    const doorKey = getString(flags, 'door-key');
+    if (doorKey !== undefined && !/^[0-9a-f]{64}$/.test(doorKey)) {
+      throw new UsageError('--door-key must be 64 lowercase hex chars');
+    }
+    return runCertifyVerify(file, {
+      witnessPublicKeyHex: witnessKey,
+      ...(doorKey === undefined ? {} : { doorPublicKeyHex: doorKey }),
+      json: flags.has('json'),
+    });
+  }
+  if (args.positionals.length > 0) {
+    throw new UsageError("certify takes no positional arguments (or the 'verify' subcommand)");
+  }
+  const db = getString(flags, 'db');
+  const witnessUrl = getString(flags, 'witness');
+  const witnessKey = getString(flags, 'witness-key');
+  if (db === undefined || witnessUrl === undefined || witnessKey === undefined) {
+    throw new UsageError('certify requires --db <path>, --witness <url>, and --witness-key <hex>');
+  }
+  if (!/^[0-9a-f]{64}$/.test(witnessKey)) {
+    throw new UsageError('--witness-key must be 64 lowercase hex chars');
+  }
+  const discloseRaw = getString(flags, 'disclose');
+  const discloseSeqs: number[] = [];
+  if (discloseRaw !== undefined) {
+    for (const part of discloseRaw.split(',')) {
+      const seq = Number.parseInt(part.trim(), 10);
+      if (!Number.isInteger(seq) || seq < 1 || String(seq) !== part.trim()) {
+        throw new UsageError(`--disclose must be comma-separated positive seqs, got '${part}'`);
+      }
+      discloseSeqs.push(seq);
+    }
+  }
+  const out = getString(flags, 'out');
+  return runCertify(process.env, db, {
+    witnessUrl: witnessUrl.replace(/\/+$/, ''),
+    witnessPublicKeyHex: witnessKey,
+    discloseSeqs,
+    ...(out === undefined ? {} : { outPath: out }),
+    json: flags.has('json'),
+  });
+}
+
+async function runWitnessCommand(args: ParsedArgs): Promise<number> {
+  if (args.positionals[0] !== 'serve') {
+    throw new UsageError("witness subcommand must be 'serve'");
+  }
+  const flags = args.flags;
+  const portRaw = getString(flags, 'port');
+  const port = portRaw === undefined ? 9411 : Number.parseInt(portRaw, 10);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    throw new UsageError('--port must be a valid TCP port');
+  }
+  const anchorRaw = getString(flags, 'anchor') ?? 'ots';
+  if (anchorRaw !== 'ots' && anchorRaw !== 'mock') {
+    throw new UsageError("--anchor must be 'ots' or 'mock'");
+  }
+  const intervalRaw = getString(flags, 'anchor-interval-hours');
+  // 'off' or 0 ⇒ on-demand only (POST /v1/anchor/run); anything else must be
+  // a positive number of hours.
+  let anchorIntervalHours: number | null;
+  if (intervalRaw === undefined) {
+    anchorIntervalHours = 24;
+  } else if (intervalRaw === 'off' || intervalRaw === '0') {
+    anchorIntervalHours = null;
+  } else {
+    anchorIntervalHours = Number(intervalRaw);
+    if (!Number.isFinite(anchorIntervalHours) || anchorIntervalHours <= 0) {
+      throw new UsageError("--anchor-interval-hours must be a positive number, 0, or 'off'");
+    }
+  }
+  const keyPath = getString(flags, 'key');
+  const keyDirectoryPath = getString(flags, 'serve-directory');
+  const statusListPath = getString(flags, 'serve-status-list');
+  return runWitnessServe({
+    dbPath: getString(flags, 'db') ?? './mandare-witness.db',
+    host: getString(flags, 'host') ?? '127.0.0.1',
+    port,
+    ...(keyPath === undefined ? {} : { keyPath }),
+    anchor: anchorRaw,
+    anchorIntervalHours,
+    ...(keyDirectoryPath === undefined ? {} : { keyDirectoryPath }),
+    ...(statusListPath === undefined ? {} : { statusListPath }),
+  });
+}
+
 function runVaultCommand(args: ParsedArgs): number {
   const sub = args.positionals[0];
   if (sub === 'import-env') {
@@ -381,6 +519,12 @@ async function main(): Promise<number> {
   }
   if (command === 'vault') {
     return runVaultCommand(args);
+  }
+  if (command === 'certify') {
+    return runCertifyCommand(args);
+  }
+  if (command === 'witness') {
+    return runWitnessCommand(args);
   }
   throw new UsageError(`unknown command: ${command}`);
 }

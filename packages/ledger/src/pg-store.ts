@@ -274,6 +274,13 @@ export class PgStore implements LedgerStore {
     return result.rows.map((row) => JSON.parse(row.entry_json) as unknown);
   }
 
+  async readEntryHashes(): Promise<string[]> {
+    const result = await this.pool.query<{ entry_hash: string }>(
+      'SELECT entry_hash FROM ledger_entries ORDER BY seq ASC'
+    );
+    return result.rows.map((row) => row.entry_hash);
+  }
+
   async close(): Promise<void> {
     await this.pool.end();
   }
