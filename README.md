@@ -2,6 +2,11 @@
 
 **Give your agents a budget they cannot talk their way out of.**
 
+[![CI](https://github.com/mandarelabs/mandare/actions/workflows/ci.yml/badge.svg)](https://github.com/mandarelabs/mandare/actions/workflows/ci.yml)
+[![License: AGPL-3.0 + Apache-2.0](https://img.shields.io/badge/license-AGPL--3.0%20%2B%20Apache--2.0-blue)](LICENSING.md)
+[![npm](https://img.shields.io/npm/v/%40mandarelabs%2Fsdk?label=%40mandarelabs%2Fsdk)](https://www.npmjs.com/package/@mandarelabs/sdk)
+[![Security review](https://img.shields.io/badge/security_review-S8_adversarial-brightgreen)](docs/SECURITY-REVIEW-S8.md)
+
 Mandare is the accountability stack for AI agent fleets: verified agent
 identity (**Passport**), signed machine-readable authority (**Mandate**), a
 tamper-evident ledger of what agents actually did (**Ledger**), an offline
@@ -11,10 +16,11 @@ on separate infrastructure, not even by the operator — the solo compose
 stack runs everything on one host and says so). Local-first: raw activity
 never leaves your machine.
 
-> **Status: pre-launch.** All five core layers are built and red-team-tested;
-> packaging (this repo, the docs, docker, MCP, SDKs) is fresh. Terminal
-> captures of the five acceptance demos are in [`docs/demos/`](docs/demos/)
-> — a demo GIF lands with the public release.
+![A runaway agent loop dies at €20 — call #72 is refused, the refusal is itself a ledger entry, and `mandare verify` proves the chain](docs/demos/runaway-demo.gif)
+
+<sub>Replay of the captured [Demo 1](docs/demos/S2-runaway-demo.txt) run — the
+same script CI executes and asserts on every push. Regenerate:
+`node scripts/render-demo-gif.mjs`.</sub>
 
 ## Quickstart — 3 commands, no API keys needed
 
@@ -47,7 +53,11 @@ No docker:
 pnpm demo
 ```
 
-## How it works
+## Proofs, not data
+
+Raw prompts and responses never leave your machine. What crosses a trust
+boundary is only ever a **proof**: salted tree heads to the witness, an
+integrity certificate to an auditor, a revocation bitstring to a verifier.
 
 ```
  agent (any SDK, base URL → the door)
@@ -81,6 +91,10 @@ no's.
 | 4 | The card declines AT THE NETWORK; one cap governs both rails | `pnpm demo:card` |
 | 5 | Truncation and rewrites can't hide from the witness | `pnpm demo:witness` |
 
+Each demo also exists as a self-contained, narrated scenario in
+[`examples/`](examples/) — the story, the real captured output, and the code
+to read next.
+
 ## Integrations
 
 | Surface | Where | What |
@@ -95,6 +109,13 @@ no's.
 
 ## Security & provenance
 
+- **Adversarially reviewed before launch**: four independent reviewers
+  (crypto/integrity · spend/enforcement · packaging/supply-chain ·
+  docs-vs-claims) were prompted to break the system. 15 findings — 3 HIGH —
+  all fixed with regression tests or documented as accepted residuals, none
+  silent. Full report: [`docs/SECURITY-REVIEW-S8.md`](docs/SECURITY-REVIEW-S8.md),
+  including what was probed and held, the honest residuals, and the target
+  list for the external audit.
 - **Fail-closed by construction**: no mandate → no spend; ledger down → no
   action; witness dead → high-value actions refuse (the kill switch never
   depends on anything remote).

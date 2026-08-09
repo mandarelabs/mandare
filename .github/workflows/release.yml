@@ -1,40 +1,73 @@
-# Signed-release workflow (S7: real steps, DRY-RUN ONLY — nothing publishes
-# until S9 flips the switch). BUILD-DECISIONS Q24/Q25:
+# Signed-release workflow — ARMED at S9, structurally publish-safe until S9b.
 #
-#   - npm Trusted Publishing (OIDC): `npm publish --provenance`, NO tokens;
-#     npm package settings at launch: disallow tokens, require 2FA.
-#   - SLSA Build L3 via the reusable slsa-github-generator workflow;
-#     verify with `gh attestation verify`.
-#   - Docker images: cosign keyless + actions/attest-build-provenance → GHCR.
+# BUILD-DECISIONS Q24/Q25 posture:
+#   - npm Trusted Publishing (OIDC): `pnpm publish --provenance`, NO tokens
+#     (pnpm ≥ 10.9 exchanges the OIDC token itself; npm package settings at
+#     launch: disallow tokens, require 2FA). Founder must configure the
+#     trusted publisher on the `mandarelabs` org first (LAUNCH-CHECKLIST F1).
+#   - SLSA Build L3 via the reusable slsa-github-generator workflow over the
+#     release artifact hashes; consumers verify with `gh attestation verify`
+#     / slsa-verifier.
+#   - Docker image: pushed to GHCR, cosign keyless signature +
+#     actions/attest-build-provenance.
 #   - OpenClaw skill: clawhub.skill.verify.v1 envelope signed with the
-#     release key (repo secret MANDARE_RELEASE_KEY_PEM, created at S9).
-#   - S9 flips: trigger → tag push (v*), publish=true, add the SLSA job.
-#   - REPRODUCING.md documents the rebuild path (no bit-for-bit claim).
-name: Release (dry-run until launch)
+#     release key (repo secret MANDARE_RELEASE_KEY_PEM) and then verified
+#     with the key PINNED (--expect-key — the S8/P1 gate: unsigned or
+#     unpinned artifacts fail closed). Dry runs sign with an EPHEMERAL key
+#     so the whole sign→pin→verify path is exercised without the secret.
+#
+# PUBLISH SAFETY: the `gate` job refuses (exit 1, loud) any publish attempt
+# — tag push or dispatch with publish=true — while the repository is still
+# PRIVATE. Until the S9b flip, every run of this workflow is a dry-run by
+# construction; nothing can reach a registry.
+
+name: Release
 
 on:
+  push:
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       publish:
-        description: 'Actually publish (S9+ only — leave false)'
+        description: 'Actually publish (S9b+ only; refused while repo is private)'
         type: boolean
         default: false
 
 permissions:
   contents: read
-  id-token: write # OIDC for npm Trusted Publishing — kept so nobody forgets
 
-# The Apache-2.0 packages are the publishable set (LICENSING.md); AGPL doors
-# publish at launch too, but provenance work starts with the embeddable ones.
 env:
   PUBLISH_PACKAGES: >-
     packages/spec packages/policy-engine packages/verifier packages/passport
     packages/witness-protocol packages/sdk packages/mcp-server apps/cli
 
 jobs:
-  build-and-pack:
-    name: build · test · pack · hash (no publish)
+  gate:
+    name: publish gate (refuses while repo is private)
     runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.decide.outputs.publish }}
+    steps:
+      - id: decide
+        run: |
+          set -euo pipefail
+          WANT=false
+          if [[ "${{ github.event_name }}" == "push" ]]; then WANT=true; fi
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.publish }}" == "true" ]]; then WANT=true; fi
+          PRIVATE="${{ github.event.repository.private }}"
+          if [[ "$WANT" == "true" && "$PRIVATE" != "false" ]]; then
+            echo "::error::publish requested (tag push or publish=true) but the repository is PRIVATE — the S9b public flip has not happened; refusing. See docs/launch/LAUNCH-CHECKLIST.md."
+            exit 1
+          fi
+          echo "publish=$WANT" >> "$GITHUB_OUTPUT"
+          echo "mode: publish=$WANT (repo private=$PRIVATE)"
+
+  build-and-pack:
+    name: build · test · sign skill · pack · hash
+    needs: gate
+    runs-on: ubuntu-latest
+    outputs:
+      hashes: ${{ steps.hash.outputs.hashes }}
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
@@ -47,13 +80,7 @@ jobs:
       - run: pnpm build
       - run: pnpm test
 
-      - name: Refuse accidental publish before launch
-        if: inputs.publish
-        run: |
-          echo "::error::publish=true is not armed until S9 (repo is private; registries stay untouched)"
-          exit 1
-
-      - name: pnpm publish --dry-run (rewrites workspace ranges; provenance shape)
+      - name: pnpm publish --dry-run (workspace-range rewrite + provenance shape)
         run: |
           set -euo pipefail
           for dir in $PUBLISH_PACKAGES; do
@@ -63,6 +90,41 @@ jobs:
             # workspace protocol and be uninstallable (S7 review M1).
             (cd "$dir" && pnpm publish --dry-run --access public --no-git-checks)
           done
+
+      - name: Sign + pin-verify the OpenClaw skill (S8/P1 gate)
+        env:
+          RELEASE_KEY_PEM: ${{ secrets.MANDARE_RELEASE_KEY_PEM }}
+          MUST_PUBLISH: ${{ needs.gate.outputs.publish }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          if [[ -n "$RELEASE_KEY_PEM" ]]; then
+            printf '%s' "$RELEASE_KEY_PEM" > dist/release-key.pem
+            echo "signing with the RELEASE key (repo secret)"
+          elif [[ "$MUST_PUBLISH" == "true" ]]; then
+            echo "::error::publishing requires the MANDARE_RELEASE_KEY_PEM repo secret (LAUNCH-CHECKLIST F1)"
+            exit 1
+          else
+            # Dry run without the secret: sign with an ephemeral key so the
+            # sign→pin→verify path is still fully exercised.
+            openssl genpkey -algorithm ed25519 -out dist/release-key.pem
+            echo "dry run: signing with an EPHEMERAL key"
+          fi
+          chmod 600 dist/release-key.pem
+          MANDARE_RELEASE_KEY_PEM=dist/release-key.pem \
+            node scripts/package-openclaw-skill.mjs --out dist/release/openclaw-skill
+          PUBKEY_HEX=$(node -e '
+            const { createPublicKey } = require("node:crypto");
+            const { readFileSync } = require("node:fs");
+            const der = createPublicKey(readFileSync("dist/release-key.pem"))
+              .export({ format: "der", type: "spki" });
+            console.log(der.subarray(der.length - 32).toString("hex"));
+          ')
+          echo "release public key: $PUBKEY_HEX"
+          # The P1 gate: VERIFIED requires a signature from the PINNED key.
+          node scripts/verify-openclaw-skill.mjs dist/release/openclaw-skill --expect-key "$PUBKEY_HEX"
+          echo "$PUBKEY_HEX" > dist/release/openclaw-skill/RELEASE-KEY.hex
+          rm -f dist/release-key.pem
 
       - name: Pack artifacts + refuse workspace-protocol leaks + SHA256SUMS
         run: |
@@ -78,17 +140,123 @@ jobs:
               exit 1
             fi
           done
-          node scripts/package-openclaw-skill.mjs --out dist/release/openclaw-skill
           cp packages/mcp-server/server.json dist/release/mcp-server.json
           (cd dist/release && shasum -a 256 *.tgz mcp-server.json openclaw-skill/SHA256SUMS > SHA256SUMS)
           cat dist/release/SHA256SUMS
 
-      - name: Docker image build (no push)
-        run: docker build -t mandare:release-dryrun .
+      - name: Compute SLSA subjects
+        id: hash
+        run: |
+          set -euo pipefail
+          echo "hashes=$(base64 -w0 < dist/release/SHA256SUMS)" >> "$GITHUB_OUTPUT"
+
+      - name: Docker image build (push happens in publish-docker)
+        run: docker build -t mandare:release .
         timeout-minutes: 20
 
       - uses: actions/upload-artifact@v4
         with:
-          name: release-dryrun
+          name: release-artifacts
           path: dist/release
-          retention-days: 14
+          retention-days: 30
+
+  # SLSA Build L3 provenance over the artifact hashes (Q24). The reusable
+  # generator MUST be referenced by tag and runs only on real releases.
+  provenance:
+    name: SLSA L3 provenance
+    needs: [gate, build-and-pack]
+    if: needs.gate.outputs.publish == 'true'
+    permissions:
+      actions: read
+      id-token: write
+      contents: write
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: ${{ needs.build-and-pack.outputs.hashes }}
+      upload-assets: true
+
+  publish-npm:
+    name: npm publish (Trusted Publishing, OIDC)
+    needs: [gate, build-and-pack]
+    if: needs.gate.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC exchange — no npm tokens exist anywhere
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: pnpm
+          registry-url: 'https://registry.npmjs.org'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Publish the Apache/embeddable set + CLI with provenance
+        run: |
+          set -euo pipefail
+          for dir in $PUBLISH_PACKAGES; do
+            echo "── publishing $dir"
+            (cd "$dir" && pnpm publish --provenance --access public --no-git-checks)
+          done
+
+  publish-docker:
+    name: GHCR push + cosign + build provenance
+    needs: [gate, build-and-pack]
+    if: needs.gate.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: sigstore/cosign-installer@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build + push
+        id: push
+        run: |
+          set -euo pipefail
+          REF="${GITHUB_REF_NAME}"
+          IMAGE="ghcr.io/${{ github.repository }}"
+          docker build -t "$IMAGE:$REF" -t "$IMAGE:latest" .
+          docker push "$IMAGE:$REF"
+          docker push "$IMAGE:latest"
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE:$REF" | cut -d@ -f2)
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+      - name: cosign sign (keyless, transparency-logged)
+        run: cosign sign --yes "${{ steps.push.outputs.image }}@${{ steps.push.outputs.digest }}"
+      - name: GitHub build provenance attestation
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ steps.push.outputs.image }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+  github-release:
+    name: GitHub release (artifacts + SHA256SUMS)
+    needs: [gate, build-and-pack, provenance]
+    if: needs.gate.outputs.publish == 'true' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts
+          path: dist/release
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true # founder reviews + publishes the release notes by hand
+          files: |
+            dist/release/*.tgz
+            dist/release/SHA256SUMS
+            dist/release/mcp-server.json

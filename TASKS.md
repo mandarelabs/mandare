@@ -1554,7 +1554,124 @@ None. The one `packages/spec` edit is a comment (D5); the schema and its
 
 ---
 
-## → S9 handoff (launch)
+## S9 — Launch preparation (2026-08-09)
+
+**Scope (per the S8→S9 handoff, PREPARE half only):** the pre-flip secret-scan
+gate · README as the conversion asset (Q29) · `examples/` · the Show HN draft ·
+`release.yml` armed for Trusted Publishing/SLSA/cosign · the go-live runbook.
+**Publish nothing** — the repo stays private; S9b is the flip.
+
+**Status: complete.** Repo still private, no registry touched. Full local gate
+green (typecheck/lint+license+boundaries/test; Demo 1 re-run green via
+`examples/01`); CI on origin at the end of session. Frozen floor untouched —
+the only code edit this session is one comment line (`apps/cli/src/directory.ts`).
+
+### Done
+
+- **Secret-scan gate** (`docs/launch/SECRET-SCAN-S9.md`): gitleaks 8.30.1 +
+  trufflehog 3.96.0 over ALL 37 commits on all refs — **clean**. The 5 raw
+  gitleaks hits are did:key PUBLIC keys (multibase `z6Mk…`, incl. the W3C
+  reference vector), allowlisted with rationale in `.gitleaks.toml`
+  (`useDefault = true`, one regex). `.env`/`*.db`/`*.pem` never committed;
+  `.env.example` history only ever held empty placeholders; all 37 commit
+  messages + TASKS.md reviewed against the publicity boundary — clean.
+  Fixed at tip: the private strategy-repo path in CLAUDE.md and three stale
+  "Tessera" codename uses (directory.ts, KEY-DIRECTORY.md ×2) → "Mandare
+  Cloud"/neutral. OPEN founder decision **G-IDENT**: all commits are authored
+  under the founder's personal account (handle + e-mail) — accept (recommended) or rewrite
+  history pre-flip (hash-invalidation costs documented in the report).
+- **README** rebuilt per the Q29 playbook: one-liner → 4 badges (CI, license,
+  npm, security-review) → a **real <30s demo GIF** → 3-command quickstart →
+  "Proofs, not data" architecture section → demos table (now linking
+  `examples/`) → integrations → security section that now LEADS with the S8
+  adversarial review link. The GIF (`docs/demos/runaway-demo.gif`, 2.0 MB,
+  ~23 s) is a paced replay of the REAL captured Demo 1 output — generator
+  committed as `scripts/render-demo-gif.mjs` (asciinema-cast synthesis +
+  `agg`; capture content verbatim, only pacing + ANSI color added) and
+  labeled as a replay in the README caption.
+- **`examples/`** — five self-contained narrated scenarios, one per flagship
+  demo (runaway-cap · dead-paper · one-mandate · card-at-network ·
+  rewrite-can't-hide). Each = README (claim, threat, real captured output,
+  design rationale, code pointers — all file paths verified) + `run.sh`
+  delegating to the CI-asserted `pnpm demo*` script (no logic duplication).
+  `examples/01/run.sh` executed green this session.
+- **Show HN draft** (`docs/launch/SHOW-HN.md`): title (78 chars), body, the
+  lead comment (AGPL/Apache rationale, honest threat model incl. the
+  solo-compose residual, the S8 review with finding counts, supply-chain
+  posture incl. the web-bot-auth caveat), posting logistics, and prepared
+  answers for six predictable objections. NOT posted.
+- **`release.yml` armed** (was: dispatch-only stub that always refused):
+  tag-push `v*` trigger + dispatch; a `gate` job that computes the publish
+  decision and **hard-fails any publish attempt while the repo is private**
+  (structural publish-safety until the S9b flip — this replaces the old
+  unconditional refusal); skill signing with `MANDARE_RELEASE_KEY_PEM` +
+  the S8/P1 **pin-verify gate** (`verify-openclaw-skill.mjs --expect-key`)
+  — dry runs use an EPHEMERAL Ed25519 key so sign→pin→verify is exercised
+  without the secret, publish-mode fails without the real one; SLSA Build L3
+  job (slsa-github-generator v2.1.0 over the SHA256SUMS subjects); npm
+  Trusted Publishing job (OIDC, `pnpm publish --provenance` — pnpm for the
+  workspace-range rewrite, S7 M1); GHCR + cosign keyless +
+  attest-build-provenance; draft-only GitHub release. actionlint clean (one
+  pre-existing info-level SC2035 on our own tgz glob).
+- **`docs/launch/LAUNCH-CHECKLIST.md`** — the ordered S9b runbook: 8 gates
+  (founder go, trademark, re-scan, CI, G-IDENT, namespace/Trusted
+  Publishing, dependency-pin decision, release dry-run) · the four founder
+  to-dos F1–F4 with status · the publish sequence (repo public → npm/GH
+  release → MCP registry → docs site → Show HN → **ClawHub skill LAST,
+  audit-gated**) · rollback notes stating honestly what cannot be undone
+  (re-privating recalls nothing; Rekor entries are permanent; npm unpublish
+  is restricted — deprecate + supersede is the real path).
+
+### Decisions (S9 latitude; BUILD-DECISIONS untouched)
+
+1. **No history rewrite for the codename residual.** "Tessera" in old
+   revisions is a name, not a secret; purging it would invalidate every
+   commit hash recorded in TASKS.md/SECURITY-REVIEW-S8.md and the CI-run
+   associations. Fixed at tip, accepted in history, documented. The author
+   EMAIL is different — personal data — so it's a founder gate (G-IDENT),
+   not a session call.
+2. **Publish-safety moved from "always refuse" to "refuse while private".**
+   The old stub's unconditional exit-1 can't validate the real path; the
+   gate keyed on `github.event.repository.private` lets the entire pipeline
+   dry-run-validate now while making pre-flip publishing structurally
+   impossible — same fail-closed posture as the doors.
+3. **The demo GIF is a paced replay of the real capture, and says so.** The
+   live run finishes in ~0.1 s (unwatchable); recreating a slower "live" run
+   would be staging. Replaying the CI-asserted capture with honest labeling
+   keeps the docs-vs-claims bar D1 set.
+4. **Dependency pins ship as-is (G7, recommend-ship-pinned).** next 16 /
+   fumadocs 16 / orama-override drops stay scheduled post-launch; a
+   dependency pass on launch day is risk with no payoff (lockfile-frozen,
+   cooldown-guarded).
+
+### Deviations from BUILD-DECISIONS
+
+None.
+
+### Known debt (carried; owners unchanged)
+
+- F1–F4 founder to-dos (namespace/Trusted Publishing + release secret ·
+  Stripe Issuing toggle · OTS live-smoke · OpenRouter disableKey mapping).
+- G2 trademark clearance + G5 G-IDENT — founder, pre-flip.
+- External audit (Q27) — gates the ClawHub skill only (Phase 6), not launch.
+- Compose/Docker still CI-proven only; per-sync O(n) witness recompute +
+  multi-witness knob (S6) — post-launch.
+
+---
+
+## → S9b handoff (the public flip — the first irreversible session)
+
+Everything is staged; S9b executes `docs/launch/LAUNCH-CHECKLIST.md` top to
+bottom and does nothing else. Before starting, confirm the Phase 0 gate table
+is fully green — as of S9 end, G1/G2/G5/G6/G7 are OPEN (founder) and
+G3/G4/G8 need a re-run at the flip commit. The publish sequence, rollback
+notes, and the audit-gated ClawHub rule are all in the checklist; the Show HN
+text is final in `docs/launch/SHOW-HN.md`. If any gate fails, stop — the flip
+is the one step this project cannot take back.
+
+---
+
+## → S9 handoff (launch) — ORIGINAL (the PREPARE half fulfilled by S9 above; the flip is S9b)
 
 S8 closed the review; the code is now internally consistent, honestly
 documented, and green on both drivers. S9 is the LAUNCH flip — the first session

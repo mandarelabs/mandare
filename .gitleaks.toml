@@ -1,0 +1,15 @@
+# Gitleaks config — the S9 pre-flip gate runs:
+#   gitleaks git --log-opts="--all" .
+#
+# The only allowlisted pattern is the did:key multibase form: `z6Mk…` strings
+# are base58btc-encoded Ed25519 PUBLIC keys (multicodec 0xed01) — identifiers,
+# not secrets. They appear in test vectors (including the W3C did:key
+# reference vector) and demo captures. Private key material never takes this
+# form anywhere in this codebase (agent keys are JWK/PEM files, gitignored).
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "did:key public identifiers (multibase base58btc Ed25519 public keys)"
+regexes = ['''z6Mk[1-9A-HJ-NP-Za-km-z]{40,50}''']

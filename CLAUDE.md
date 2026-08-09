@@ -21,8 +21,8 @@ exports (Recourse). Local-first: raw activity never leaves the customer —
 
 This repo goes public at launch, including its full git history. Engineering
 content only — write all code, comments, commit messages, and TASKS.md entries
-as if already public. Strategy/business content belongs in `~/projects/tessera`
-(never committed here); future commercial/cloud service code belongs in a
+as if already public. Strategy/business content stays in the founder's private
+notes (never committed here); future commercial/cloud service code belongs in a
 separate private repo; secrets only in `.env`. Before the public flip (S9), run
 a full history secret-scan (gitleaks) and a TASKS.md/commit-message review as
 an explicit checklist item.

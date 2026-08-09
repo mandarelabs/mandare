@@ -10,8 +10,8 @@ import { base64UrlToBytes, bytesToHex, sha256Hex } from '@mandarelabs/spec';
  * PEM files.
  *
  * The door OPERATOR runs this and publishes the output somewhere verifiers
- * trust independently of the ledger file (their own site, Tessera-hosted
- * later). Only PUBLIC key material ever leaves this command.
+ * trust independently of the ledger file (their own site, Mandare
+ * Cloud-hosted later). Only PUBLIC key material ever leaves this command.
  */
 
 export interface DirectoryBuildOptions {

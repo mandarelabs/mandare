@@ -60,7 +60,7 @@ Profile rules (enforced by `parseKeyDirectory` in `@mandarelabs/verifier`):
 
 - Self-hosted: `https://<operator-domain>/.well-known/http-message-signatures-directory`
   with content type `application/http-message-signatures-directory+json`.
-- Tessera-hosted (later): same path under the operator's Tessera tenant.
+- Mandare Cloud-hosted (later): same path under the operator's tenant.
 - Local file: fine for air-gapped verification; the trust requirement is
   only that the channel is independent of the ledger file.
 
@@ -81,7 +81,7 @@ Profile rules (enforced by `parseKeyDirectory` in `@mandarelabs/verifier`):
 | File attacker swaps `meta.door_public_key` + re-signs chain | Caught: directory key wins (`KEY_MISMATCH`/`KEY_UNKNOWN`) |
 | Rogue process appends entries under its own key | Caught: `KEY_UNKNOWN` |
 | Stolen rotated-out door key signs new entries | Caught: `KEY_EXPIRED` (post-`exp` timestamps) |
-| Attacker controls the directory channel too | Out of scope for S1 — witnessing (S6) + Tessera countersigning bound it |
+| Attacker controls the directory channel too | Out of scope for S1 — witnessing (S6) + witness countersigning bound it |
 
 Backdating `ts` into the old key's window is bounded by witnessing (S6):
 witnessed heads pin when the chain actually grew.
