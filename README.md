@@ -1,135 +1,122 @@
 # Mandare
 
-**The accountability stack for AI agent fleets** — verified agent identity,
-signed spending mandates, and a tamper-evident ledger of what your agents
-actually did.
+**Give your agents a budget they cannot talk their way out of.**
 
-> **Status: pre-alpha.** A local gateway now ENFORCES signed spending
-> mandates on real LLM traffic (Anthropic, OpenAI, OpenRouter — streaming
-> included): every call reserves its estimated cost inside the ledger
-> transaction, settles the true cost after, and dies at the cap. A runaway
-> agent loop cannot outspend its mandate — that is the acceptance test
-> (`pnpm demo`). Nothing here is production-ready yet.
+Mandare is the accountability stack for AI agent fleets: verified agent
+identity (**Passport**), signed machine-readable authority (**Mandate**), a
+tamper-evident ledger of what agents actually did (**Ledger**), an offline
+**kill switch** — and external **witnessing + public anchoring** so ledger
+history cannot be truncated or rewritten without detection (with the witness
+on separate infrastructure, not even by the operator — the solo compose
+stack runs everything on one host and says so). Local-first: raw activity
+never leaves your machine.
 
-## What exists today
+> **Status: pre-launch.** All five core layers are built and red-team-tested;
+> packaging (this repo, the docs, docker, MCP, SDKs) is fresh. Terminal
+> captures of the five acceptance demos are in [`docs/demos/`](docs/demos/)
+> — a demo GIF lands with the public release.
 
-- **Gateway** (`packages/gateway`) — Fastify door proxying the native
-  Anthropic (`/v1/messages`) and OpenAI/OpenRouter (`/v1/chat/completions`)
-  APIs, streaming pass-through with usage true-up. Log-before-act: an INTENT
-  entry *reserves* the estimated cost before the call executes; a RESULT
-  entry settles the true cost after; refused reservations are DENIED entries
-  on the ledger. No ledger write → no call. Budget overshoot by concurrent
-  calls is impossible by construction (reservations serialize under the
-  append lock — red-team proven).
-- **Passport** (`packages/passport`, Apache-2.0) — verified agent identity.
-  `did:key` (Ed25519) for owner and agent; an owner-signed Agent Delegation
-  Credential (SD-JWT VC) countersigned by an attestation authority after
-  (mock) KYC — the attestation carries only `{kyc_level, partner_id, date,
-  ref_hash}`, never PII. Mandates travel as owner-signed SD-JWT VCs. Agents
-  authenticate every request with RFC 9421 HTTP Message Signatures
-  (web-bot-auth profile) over method/path/authority and a Content-Digest of
-  the body, under the passport's non-exportable key. Everything verifies
-  offline; embeddable by parties who distrust us.
-- **Policy engine** (`packages/policy-engine`, Apache-2.0) — mandate
-  evaluation in SPEC order: identity → validity window → scope → budgets
-  (per-tx / per-day / per-task / total + velocity) → counterparty →
-  approval threshold. Cedar-shaped interface; checks that cannot run yet
-  fail *closed*. Above-threshold calls trigger an async human approval
-  (CIBA-style): the gateway holds the call, pushes an Approve/Deny
-  notification (ntfy), and the decision lands as a ledger entry that
-  unblocks or refuses the held request.
-- **Vault** (`packages/vault`) — the credential door. Third-party keys and the
-  door signing key live in the OS keychain (`@napi-rs/keyring`), encrypted at
-  rest; agents never see a raw secret. It mints short-lived (≤30-min)
-  proof-of-possession scoped tokens: a leaked token id without its secret is
-  dead paper, replays are refused, and a kill makes it dead instantly.
-- **Kill switch** (`mandare kill <agent>` / `--mandate <id>` / `--all`) — the
-  LOCAL, offline, un-jammable authority. It writes an `agent.revoke` entry to
-  the ledger and flips a revocation projection in the same transaction; the
-  gateway fails closed on its very next request, with no network round-trip.
-  Agents, doors, and mandates share ONE revocation vocabulary — the IETF Token
-  Status List bitstring a witness service later publishes for external
-  verifiers.
-- **Ledger** (`packages/ledger`) — append-only SQLite/Postgres store, every
-  entry hash-chained and Ed25519-signed. Budget counters AND revocation state
-  are derived projections of the ledger, rebuildable from it and continuously
-  checkable against a fresh replay (`mandare verify --spend`).
-- **Verifier** (`packages/verifier`, Apache-2.0) — pure chain verification
-  anyone can embed, including parties who distrust us.
-- **Spec** (`packages/spec`, Apache-2.0) — the typed mandate and ledger-entry
-  schemas. An open contract.
-- **CLI** (`apps/cli`) — `mandare verify --db <path>` (RFC 6962 tree heads,
-  `--key-directory`, `--prev-head` rollback detection, `--prove` inclusion
-  proofs, `--spend` trail + counter invariant, plus the approval trail, the
-  revocation trail, and the status list), `mandare passport issue` and
-  `mandare mandate issue` (SD-JWT VC issuance), `mandare
-  kill`/`reinstate`/`token`/`vault`, and `mandare directory` (publish door
-  keys as an RFC 9421-style JWKS — `docs/KEY-DIRECTORY.md`).
-
-## The demo: a runaway loop dies at €20
+## Quickstart — 3 commands, no API keys needed
 
 ```bash
-pnpm install && pnpm build
+git clone https://github.com/mandarelabs/mandare && cd mandare
+```
+
+```bash
+docker compose up -d --wait
+```
+
+```bash
+docker compose run --rm demo
+```
+
+The demo releases a runaway agent loop against **your** gateway. The €20/day
+mandate kills it mid-run: `403`, the refusal is itself a ledger entry, and
+`mandare verify` proves chain VALID, counters == replay(ledger), and the
+witnessed head history covers the chain. Dashboard at
+**http://127.0.0.1:8788**. Real providers: put keys in `.env`
+([docs](apps/docs/content/docs/quickstart.mdx)).
+
+No docker:
+
+```bash
+./install.sh
+```
+
+```bash
 pnpm demo
 ```
 
-A scripted runaway agent hammers the gateway under a €20/day mandate. Call
-#72 is refused mid-loop, the refusal itself becomes a ledger entry, and
-`mandare verify --spend` proves the chain AND that the budget counters equal
-a fresh replay of the ledger. Captured run: `docs/demos/S2-runaway-demo.txt`.
+## How it works
 
-## The demo: a stolen token is dead paper
-
-```bash
-pnpm demo:dead-paper
+```
+ agent (any SDK, base URL → the door)
+   │  RFC 9421-signed request (passport)   or scoped PoP token
+   ▼
+ ┌──────────────── gateway door ────────────────┐
+ │ kill-check → policy (mandate: caps/window/   │     ┌─ witness (external) ─┐
+ │ scope/approval) → INTENT entry (reserves     │────▶│ salted head history, │
+ │ cost in the ledger tx) → provider → RESULT   │ acks│ consistency-enforced,│
+ │ entry (settles true cost)                    │◀────│ public anchor (OTS)  │
+ └───────────────┬──────────────────────────────┘     └──────────────────────┘
+                 ▼
+        append-only ledger (SQLite/Postgres)
+        hash-chained · door-signed · RFC 6962 tree
+        budget counters + revocation = PROJECTIONS (replay-checkable)
+                 ▼
+   mandare verify · certify (third-party checkable) · dashboard · kill
 ```
 
-An agent authenticates with a short-lived vault-issued proof-of-possession
-token (the provider key stays in the vault). A thief who exfiltrates the token
-id is refused (no secret → no proof); a captured request can't be replayed
-(single-use nonce); then `mandare kill` mid-task makes the running agent's very
-next call fail closed — the refusal lands on the ledger, and `mandare verify`
-proves chain + spend + revocation all equal a fresh replay. Local authority, no
-cloud. Captured run: `docs/demos/S3-dead-paper-demo.txt`.
+Every door obeys three rules: **fail-closed on spend**, **log-before-act**,
+and **agent input is hostile**. Refusals are recorded — the system keeps its
+no's.
 
-## The demo: one signed mandate replaces 40 permission prompts
+## The five demos are the acceptance tests (CI runs all of them)
 
-```bash
-pnpm demo:mandate
-```
+| # | Claim | Run |
+|---|---|---|
+| 1 | A runaway loop dies at €20, with proof | `pnpm demo` |
+| 2 | A stolen token is dead paper; kill bites mid-task | `pnpm demo:dead-paper` |
+| 3 | One signed mandate replaces 40 prompts; humans approve async | `pnpm demo:mandate` |
+| 4 | The card declines AT THE NETWORK; one cap governs both rails | `pnpm demo:card` |
+| 5 | Truncation and rewrites can't hide from the witness | `pnpm demo:witness` |
 
-A passport-carrying agent (authority → KYC'd owner → agent, all
-offline-verifiable) runs a multi-step task under ONE owner-signed mandate.
-Every in-scope call proceeds with zero human interaction. One over-threshold
-call pauses: the gateway holds it, pushes an Approve/Deny notification, the
-human approves, and the task continues. A second over-threshold call is
-DENIED — and the refusal is a ledger entry, not a vanished dialog box. Every
-request is authenticated with an RFC 9421 signature over its exact body.
-`mandare verify` proves the whole sequence, human decisions included. Captured
-run: `docs/demos/S4-mandate-demo.txt`.
+## Integrations
 
-## Quickstart (your own keys)
+| Surface | Where | What |
+|---|---|---|
+| TypeScript SDK | `packages/sdk` (Apache-2.0) | A **signed fetch** for your existing Anthropic/OpenAI SDK (token PoP + passport RFC 9421) |
+| Python client | `packages/sdk-py` (Apache-2.0) | Zero-dependency token-mode client (stdlib only) |
+| MCP server | `packages/mcp-server` | The door as MCP tools: verify, budgets, issuance, kill — stdio, env-configured |
+| OpenClaw skill | `integrations/openclaw` | Native AgentSkills skill (also works in Claude Code): budget awareness, honest refusals, proofs, kill |
+| Self-host | `compose.yaml` + `install.sh` | gateway + witness + dashboard, no secrets needed for dry-run |
+| Dashboard | `apps/dashboard` | Local-first fleet view over the ledger; zero telemetry |
+| Docs | `apps/docs` → mandare.dev | Quickstart, concepts, threat model, reference |
 
-```bash
-cp .env.example .env       # fill in ANTHROPIC_API_KEY (and/or OPENAI/OPENROUTER)
-node scripts/dev-mandate.mjs --out mandate.json --per-day 20   # €20/day, signed
-set -a; source .env; set +a
-MANDARE_MANDATE_PATH=mandate.json MANDARE_LEDGER_DB=./ledger.db \
-MANDARE_USD_PER_LEDGER_UNIT=1.08 node packages/gateway/dist/start.js
+## Security & provenance
 
-# Point any Anthropic-SDK agent at http://127.0.0.1:8484 — or:
-curl -s localhost:8484/v1/messages -H 'content-type: application/json' \
-  -d '{"model":"claude-haiku-4-5","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}'
-node apps/cli/dist/main.js verify --db ./ledger.db --spend
-```
+- **Fail-closed by construction**: no mandate → no spend; ledger down → no
+  action; witness dead → high-value actions refuse (the kill switch never
+  depends on anything remote).
+- **Red-team suites run in CI** (rule R5): edit/delete/truncate/rollback/
+  replay/forge on SQLite AND Postgres, token theft + replay, signature
+  coverage attacks, webhook forgery, budget races, witness split-view — and
+  they may never be weakened to make a change pass.
+- **Supply chain**: pnpm 10 with install scripts off, 3-day dependency
+  cooldown, frozen lockfiles, hand-rolled security primitives pinned to
+  official test vectors (RFC 6962, did:key, Stripe signatures, OTS). From
+  launch: npm Trusted Publishing (OIDC provenance), cosign-signed images,
+  signed skill envelopes. Honest reproducibility bar in
+  [`REPRODUCING.md`](REPRODUCING.md).
+- **Verify without trusting us**: the verifier, passport, and witness
+  protocol are Apache-2.0 and embeddable; `mandare certify` produces
+  integrity certificates a third party checks with no ledger access.
+- Vulnerabilities: see [`SECURITY.md`](SECURITY.md) (private reporting, safe
+  harbor, 90-day disclosure).
 
 ## License
 
-AGPL-3.0-only, **except** the packages listed in [LICENSING.md](LICENSING.md),
-which are Apache-2.0 (spec, policy engine, verifier — the parts the ecosystem
-must be able to embed and independently implement).
-
-## Security
-
-See [SECURITY.md](SECURITY.md). Signed releases, provenance, and the audit
-trail are core to this project, not an afterthought.
+AGPL-3.0-only, **except** the embeddable packages listed in
+[`LICENSING.md`](LICENSING.md) (spec, policy-engine, verifier, passport,
+witness-protocol, sdk, sdk-py — Apache-2.0). The split is permanent; we do
+not relicense.

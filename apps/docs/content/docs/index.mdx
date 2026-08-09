@@ -1,0 +1,38 @@
+---
+title: What is Mandare?
+description: The accountability stack for AI agent fleets — identity, authority, evidence, and a kill switch that works offline.
+---
+
+Agents can now spend money, call APIs, and act for hours without a human in
+the loop. The missing piece is not more intelligence — it is **accountability**:
+who is this agent, what exactly may it do, what did it actually do, and how do
+you stop it *right now*?
+
+Mandare is that piece, as local-first open-source infrastructure:
+
+| Layer | What it answers | How |
+|---|---|---|
+| **Passport** | *Who is acting?* | Per-agent Ed25519 keys bound to an owner by a verifiable delegation credential (SD-JWT VC, did:key). Every request is signed (RFC 9421 + Content-Digest). |
+| **Mandate** | *What may it do?* | A human signs machine-readable authority once: spend caps (per call / day / task / total), validity window, approval thresholds. The gateway enforces it **before** each action. |
+| **Ledger** | *What did it do?* | Every intent, result, and refusal is an append-only, hash-linked, door-signed entry. Budget counters are a projection of the ledger — provably equal to a replay. |
+| **Kill switch** | *How do I stop it?* | `mandare kill` is a local, offline write: the gateway refuses the agent on its very next request. No cloud round-trip to jam. |
+| **Witness** | *Can history be rewritten?* | Salted chain-head fingerprints stream to an external witness (content-free). Truncation and rewrites — even by the operator — are detectable, and high-value actions can be gated on a verified witness ack. |
+
+Two properties run through everything:
+
+- **Fail-closed.** No mandate → no spend. Ledger unavailable → no action.
+  Witness dead → high-value actions refuse (and the kill switch still works).
+  The failure mode of every component is *money stops moving*.
+- **Local-first.** Raw activity never leaves your machine. The witness sees
+  32-byte salted hashes, never content. Verification (`mandare verify`, the
+  integrity certificate) is designed for parties who distrust us — the
+  verifier and protocol packages are Apache-2.0 and embeddable.
+
+## Where to go next
+
+- [Quickstart](/docs/quickstart) — a running, enforcing gateway in ~5 minutes.
+- [Concepts](/docs/concepts) — the model in plain words.
+- [The five demos](/docs/demos) — each security property, demonstrated and
+  asserted in CI.
+- [Threat model](/docs/threat-model) — what is proven, and the residuals we
+  state instead of hiding.

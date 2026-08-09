@@ -1,25 +1,39 @@
-# Signed-release workflow — STUB (S0). Completed before the first published
-# release (S9), per BUILD-DECISIONS Q24/Q25:
+# Signed-release workflow (S7: real steps, DRY-RUN ONLY — nothing publishes
+# until S9 flips the switch). BUILD-DECISIONS Q24/Q25:
 #
-#   - npm Trusted Publishing (OIDC): `npm publish --provenance` with NO tokens;
-#     npm package settings: disallow token publishing, require 2FA.
+#   - npm Trusted Publishing (OIDC): `npm publish --provenance`, NO tokens;
+#     npm package settings at launch: disallow tokens, require 2FA.
 #   - SLSA Build L3 via the reusable slsa-github-generator workflow;
 #     verify with `gh attestation verify`.
 #   - Docker images: cosign keyless + actions/attest-build-provenance → GHCR.
-#   - Trigger becomes tag push (v*) instead of workflow_dispatch.
+#   - OpenClaw skill: clawhub.skill.verify.v1 envelope signed with the
+#     release key (repo secret MANDARE_RELEASE_KEY_PEM, created at S9).
+#   - S9 flips: trigger → tag push (v*), publish=true, add the SLSA job.
 #   - REPRODUCING.md documents the rebuild path (no bit-for-bit claim).
-name: Release (stub)
+name: Release (dry-run until launch)
 
 on:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Actually publish (S9+ only — leave false)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
-  id-token: write # OIDC for npm Trusted Publishing — kept here so nobody forgets
+  id-token: write # OIDC for npm Trusted Publishing — kept so nobody forgets
+
+# The Apache-2.0 packages are the publishable set (LICENSING.md); AGPL doors
+# publish at launch too, but provenance work starts with the embeddable ones.
+env:
+  PUBLISH_PACKAGES: >-
+    packages/spec packages/policy-engine packages/verifier packages/passport
+    packages/witness-protocol packages/sdk packages/mcp-server apps/cli
 
 jobs:
-  dry-run:
-    name: build + pack dry-run (no publish)
+  build-and-pack:
+    name: build · test · pack · hash (no publish)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -32,7 +46,49 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: pnpm test
-      - name: Pack every workspace package (dry run)
-        run: pnpm -r exec npm pack --dry-run
-      - name: Publish placeholder
-        run: echo "TODO(S9) — npm publish --provenance via Trusted Publishing; SLSA attestation; cosign. See file header."
+
+      - name: Refuse accidental publish before launch
+        if: inputs.publish
+        run: |
+          echo "::error::publish=true is not armed until S9 (repo is private; registries stay untouched)"
+          exit 1
+
+      - name: pnpm publish --dry-run (rewrites workspace ranges; provenance shape)
+        run: |
+          set -euo pipefail
+          for dir in $PUBLISH_PACKAGES; do
+            echo "── $dir"
+            # pnpm (NOT npm) publish/pack: only pnpm rewrites `workspace:*`
+            # into real semver ranges — an npm-packed tarball would ship the
+            # workspace protocol and be uninstallable (S7 review M1).
+            (cd "$dir" && pnpm publish --dry-run --access public --no-git-checks)
+          done
+
+      - name: Pack artifacts + refuse workspace-protocol leaks + SHA256SUMS
+        run: |
+          set -euo pipefail
+          mkdir -p dist/release
+          for dir in $PUBLISH_PACKAGES; do
+            (cd "$dir" && pnpm pack --pack-destination "$GITHUB_WORKSPACE/dist/release")
+          done
+          # Belt: no packed manifest may carry the workspace protocol.
+          for tgz in dist/release/*.tgz; do
+            if tar -xOzf "$tgz" package/package.json | grep -q '"workspace:'; then
+              echo "::error::$tgz still contains workspace:* dependency ranges — unpublishable"
+              exit 1
+            fi
+          done
+          node scripts/package-openclaw-skill.mjs --out dist/release/openclaw-skill
+          cp packages/mcp-server/server.json dist/release/mcp-server.json
+          (cd dist/release && shasum -a 256 *.tgz mcp-server.json openclaw-skill/SHA256SUMS > SHA256SUMS)
+          cat dist/release/SHA256SUMS
+
+      - name: Docker image build (no push)
+        run: docker build -t mandare:release-dryrun .
+        timeout-minutes: 20
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-dryrun
+          path: dist/release
+          retention-days: 14

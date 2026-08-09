@@ -20,9 +20,13 @@
     "demo:mandate": "node scripts/demo-mandate.mjs",
     "demo:card": "node scripts/demo-card.mjs",
     "demo:witness": "node scripts/demo-witness.mjs",
+    "skill-smoke": "node scripts/skill-smoke.mjs",
+    "docs-install-smoke": "node scripts/docs-install-smoke.mjs",
     "live-smoke": "node scripts/live-smoke.mjs",
     "card-live-smoke": "node scripts/card-live-smoke.mjs",
-    "provisioning-smoke": "node scripts/provisioning-smoke.mjs"
+    "provisioning-smoke": "node scripts/provisioning-smoke.mjs",
+    "sdk-py-smoke": "node scripts/sdk-py-smoke.mjs",
+    "stack-smoke": "node scripts/stack-smoke.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

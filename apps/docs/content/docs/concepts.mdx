@@ -1,0 +1,73 @@
+---
+title: Concepts
+description: Passport, Mandate, Ledger, Door, Witness, Anchor — the model in plain words.
+---
+
+## Door
+
+Any Mandare component an action must pass through: the LLM gateway, the
+credential vault, the card rail. Doors share one discipline —
+**log-before-act**: write the intent to the ledger, execute, write the
+result. No entry, no action. A refused action is *also* an entry: the system
+records its no's.
+
+## Passport (who)
+
+Each agent holds its own Ed25519 key. A **delegation credential** (SD-JWT VC)
+signed by the owner — and countersigned by an attestation authority — binds
+that key to the accountable human. Agents sign every request under their key
+(RFC 9421 HTTP Message Signatures, with a Content-Digest over the exact body
+bytes), so the door verifies *who acted*, not just who held a token. All
+identifiers are `did:key`: verification is offline, no resolver, no phone-home.
+
+## Mandate (may)
+
+The signed permission slip: spend caps per transaction / day / task / total,
+validity window, allowed scopes, and an approval threshold above which a
+human must asynchronously approve. Mandates are signed by the owner and
+self-verifying; the policy engine evaluates the same fixed order on every
+action (identity → window → scope → budget → counterparty → approval).
+Caps are enforced by **reservation**: an intent reserves its estimated cost
+inside the ledger transaction *before* the call; results settle the true
+cost. Two concurrent calls cannot both squeeze through the last euro of a
+budget — that is structural, not statistical, and there is a red-team test
+racing 20 calls to prove it.
+
+## Ledger (did)
+
+Append-only, hash-linked, door-signed entries in SQLite (solo) or Postgres
+(team). Budget counters and revocation state are **projections** of the
+ledger — derived tables, rebuildable from the entries, with a verifier
+(`mandare verify --spend`) that recomputes them from scratch and compares.
+The ledger's RFC 6962 Merkle tree head is the chain's fingerprint: inclusion
+proofs disclose single entries; consistency proofs prove append-only growth.
+
+## Kill switch (stop)
+
+`mandare kill <agent>` (or `--mandate`, or `--all`) writes a revocation entry
+locally — offline, no cloud dependency, nothing to jam. The gateway checks
+revocation state on **every** request, before auth, so even a killed agent's
+refusal lands on the ledger. Scoped tokens die with their actor; virtual
+cards decline at the network. Revocation state renders into one IETF Token
+Status List bitstring — agents, mandates, doors, and cards share a single
+revocation vocabulary.
+
+## Witness (can't rewrite)
+
+A ledger on your own disk can be truncated or re-signed by whoever holds the
+machine. The witness closes that: the door streams **salted chain-head
+fingerprints** (32 bytes, content-free) to an external witness that enforces
+append-only consistency at submission time and signs acknowledgements.
+`mandare verify --witness` convicts truncation and rewrites that self-anchored
+verification cannot see. High-value actions (the mandate's approval-threshold
+set) can be **gated on a verified witness ack** — a zero tamper window for
+the actions that matter. A dead witness fails those actions closed and never
+blocks a kill.
+
+## Anchor (even we can't)
+
+The witness aggregates all sources into one Merkle tree and anchors the root
+publicly (OpenTimestamps → Bitcoin by default). The **integrity certificate**
+(`mandare certify`) packages selective disclosures with inclusion proofs,
+witnessed-head consistency, and the public anchor — verifiable by a third
+party with **no ledger access** and no trust in Mandare.

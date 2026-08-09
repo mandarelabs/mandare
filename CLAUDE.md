@@ -53,8 +53,15 @@ an explicit checklist item.
 | `packages/card-rail` | AGPL-3.0-only | Stripe Issuing door: mandate-checked virtual cards, real-time authorization webhook → approve/decline at the network |
 | `packages/witness-protocol` | Apache-2.0 | Witness wire protocol: salted head submissions, signed acks, door-side client, `Anchor` interface (OpenTimestamps), integrity-certificate build/verify |
 | `packages/witness` | AGPL-3.0-only | Reference witness server: per-source witnessed head history (consistency-enforced), aggregate Merkle tree, public anchoring, static key-directory/status-list hosting |
+| `packages/sdk` | Apache-2.0 | TS SDK: signed fetch (token PoP + passport RFC 9421) for existing Anthropic/OpenAI SDKs |
+| `packages/sdk-py` | Apache-2.0 | Zero-dep Python client (token mode; NOT a pnpm workspace member — no package.json) |
+| `packages/mcp-server` | AGPL-3.0-only | MCP stdio server adapting the CLI (verify/budgets/issuance/kill); `server.json` prepared, unpublished |
 | `apps/cli` | AGPL-3.0-only | `mandare` binary (`verify [--witness]`, `certify`, `witness serve`, `kill`, `reinstate`, `token`, `vault`) |
-| `scripts/` | — | license-boundary gate, smoke E2E, Claude hooks |
+| `apps/dashboard` | AGPL-3.0-only | Next.js fleet view over the ledger (read-only SQLite + CLI shell for verify/kill); zero telemetry |
+| `apps/docs` | AGPL-3.0-only | Fumadocs site (quickstart/concepts/threat-model/reference) → mandare.dev |
+| `integrations/openclaw` | Apache-2.0 | Native AgentSkills skill + `clawhub.skill.verify.v1` trust envelope (packaged by scripts, unpublished) |
+| `compose.yaml` + `Dockerfile` + `docker/` | — | Self-host stack: gateway + witness + dashboard + mock provider (dry-run needs no secrets) |
+| `scripts/` | — | license-boundary gate, smoke E2Es (stack/skill/sdk-py/docs-install), demos, Claude hooks |
 
 **License import direction (enforced by `scripts/check-license-boundaries.mjs`
 + turbo boundaries):** Apache packages may NEVER depend on AGPL packages.
@@ -67,6 +74,10 @@ pnpm build / typecheck / lint / test   # turbo across the workspace
 pnpm red-team                          # tamper suite only (packages/ledger)
 pnpm smoke                             # walking-skeleton E2E vs mock provider
 pnpm demo:witness                      # Demo 5: the rewrite that can't hide (S6)
+pnpm stack-smoke                       # compose topology WITHOUT docker (entry scripts E2E)
+pnpm skill-smoke                       # OpenClaw skill commands E2E + trust envelope
+pnpm sdk-py-smoke                      # Python client ↔ real token-auth door
+pnpm docs-install-smoke                # fresh-copy install + Demo 1 from public docs (~4 min)
 node scripts/check-license-boundaries.mjs
 ```
 
@@ -91,11 +102,14 @@ node scripts/check-license-boundaries.mjs
 Required for: any change to `packages/spec` (schema freeze) · payment-rail
 integrations (Stripe webhook flow) · anything reshaping the repo layout.
 
-## Session roadmap (S0–S5 done ⇒ next: S6)
+## Session roadmap (S0–S7 done ⇒ next: S8)
 
 S1 ledger core hardening ✓ → S2 gateway+budgets (Demo: runaway loop dies at €20) ✓
 → S3 vault+kill switch (Demo: stolen token is dead paper) ✓ → S4
 mandates+approvals (SD-JWT transport, passport identity, CIBA push) ✓ → S5 card
 rail (Demo: the card declines at the network) ✓ → S6 witness+anchoring
-(publishes the S3 revocation status list; closes the truncation boundary) → S7
-packaging/MCP/skill → S8 review → S9 launch prep.
+(publishes the S3 revocation status list; closes the truncation boundary) ✓ →
+S7 packaging (MCP server, OpenClaw skill, SDKs, compose self-host, dashboard,
+docs site, clean-machine install smoke) ✓ → S8 parallel security/contract
+review → S9 launch prep (publish npm/MCP/ClawHub, public flip). NOTHING is
+published to any registry before S9.

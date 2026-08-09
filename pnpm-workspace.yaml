@@ -14,3 +14,9 @@ onlyBuiltDependencies:
   - '@embedded-postgres/darwin-x64'
   - '@embedded-postgres/linux-x64'
   - '@embedded-postgres/linux-arm64'
+
+# fumadocs-core 15.x expects @orama/orama 3.1.14 semantics; 3.1.18 breaks its
+# search-index build (schema format regression). Pin until the fumadocs 16
+# bump (S9 dependency pass).
+overrides:
+  '@orama/orama': '3.1.14'

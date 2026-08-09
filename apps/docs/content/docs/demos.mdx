@@ -1,0 +1,67 @@
+---
+title: The five demos
+description: Every security property is a runnable, asserting script — the demos ARE the acceptance tests, and CI runs all five.
+---
+
+Each demo is a script that **asserts** its claims (not a video), runs against
+mock providers with zero secrets, and is executed on every CI run. Terminal
+captures live in [`docs/demos/`](https://github.com/mandarelabs/mandare/tree/main/docs/demos).
+
+## 1 · The runaway loop dies at €20
+
+```bash
+pnpm demo
+```
+
+A scripted agent hammers the gateway with max-output calls under a €20/day
+mandate. Call #72's reservation is refused **before** the provider is hit;
+the refusal is a ledger entry; `mandare verify --spend` proves chain VALID
+and counters == replay(ledger). This is the demo the
+[quickstart](/docs/quickstart) reproduces in your own stack.
+
+## 2 · A stolen token is dead paper
+
+```bash
+pnpm demo:dead-paper
+```
+
+Scoped tokens are proof-of-possession: a leaked token id without its
+per-token secret is refused (`BAD_POP`), a captured signed request replays to
+`REPLAYED_NONCE`, and after `mandare kill` mid-task the next perfectly valid
+call gets `403 AGENT_REVOKED` — with the refusal on the ledger.
+
+## 3 · One signed mandate replaces 40 permission prompts
+
+```bash
+pnpm demo:mandate
+```
+
+A passport-carrying agent (real delegation chain, every request
+RFC-9421-signed) runs a 6-step task with zero prompts. Step 7 crosses the
+approval threshold: the call **holds**, a push goes out, the human approves
+asynchronously, the call resumes. Step 8 is denied by the human — and the
+deny is on the ledger next to the approve.
+
+## 4 · The card declines at the network
+
+```bash
+pnpm demo:card
+```
+
+One €20 mandate governs BOTH rails: LLM calls settle €15, a €4.20 purchase
+approves at the network via the real-time Stripe Issuing authorization
+webhook, the next €3.00 declines **at the network** (the money never moves),
+and `mandare kill` turns the card to dead plastic. Cross-rail totals proven
+by `mandare verify --spend`.
+
+## 5 · The rewrite that can't hide
+
+```bash
+pnpm demo:witness
+```
+
+Heads stream to a real witness process. A truncated ledger copy and a
+re-signed rewrite — both of which pass self-anchored verification — are both
+CONVICTED by `mandare verify --witness`. The aggregate root is anchored, and
+`mandare certify` emits a selective-disclosure certificate a third party
+verifies with no ledger access; a doctored certificate is INVALID.

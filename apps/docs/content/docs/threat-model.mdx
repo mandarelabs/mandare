@@ -1,0 +1,84 @@
+---
+title: Threat model
+description: What is proven, against whom — and the residuals we state instead of hiding.
+---
+
+Mandare's habit is to say exactly what each mechanism does and does not
+prove. The red-team suites in CI are the executable version of this page:
+every attack below that we claim to catch is a permanent test.
+
+## Adversaries considered
+
+1. **The agent itself** (prompt-injected, buggy, or adversarial): tries to
+   overspend, escape scope, replay credentials, blind the meter, or talk a
+   door into something.
+2. **A thief of agent credentials**: stolen token ids, captured requests,
+   exfiltrated key files.
+3. **A local attacker with file access** (or a compromised operator
+   account): edits, deletes, truncates, or re-signs the ledger; restores an
+   older copy; swaps keys.
+4. **A malicious or failing witness**.
+5. **A malicious upstream package** (supply chain — see
+   [Security & provenance](/docs/security)).
+
+## What is enforced pre-action
+
+- Budgets by **reservation inside the ledger transaction** — the
+  concurrent-overshoot race is closed structurally (a 20-way race test
+  admits exactly the calls that fit).
+- Mandate windows, scopes, per-request identity (passport signature over the
+  exact body bytes), revocation state (checked before auth, every request),
+  and approval thresholds (fail-closed holds with a bounded pending set).
+- Card authorizations decline **at the network** inside Stripe's 2-second
+  budget; the decision path is fully local (p99 well under 10 ms).
+
+## What is tamper-EVIDENT (and against whom)
+
+| Attack | Caught by | Notes |
+|---|---|---|
+| Edit / delete / reorder entries | `mandare verify` (hash chain + signatures) | append-only triggers refuse in-place too |
+| Gap injection / replay / splice | chain verify + projection replay | duplicate card-auth intents explode on replay |
+| Counter tampering | `--spend` (replay(ledger) == counters) | stale vs divergent distinguished |
+| Truncation / restore-older-copy | `--witness` (witnessed head history) | invisible to self-anchored verification — that is WHY the witness exists |
+| Full rewrite under the real door key | `--witness` consistency | the strongest local attacker — **when the witness runs on infrastructure that attacker doesn't control**; witness acks make the tamper window zero for gated actions |
+| Witness lying about history | witness signatures + public anchor | a witness can refuse service (fail-closed), not forge |
+
+## Honest residuals
+
+Stated, not footnoted:
+
+- **A door is software on a machine.** An attacker with root on the door
+  host can stop the door (fail-closed) and read what the door can read. They
+  cannot un-write witnessed history or spend past caps without leaving
+  evidence — accountability, not confidentiality of the host, is the claim.
+- **Token-mode PoP does not bind the request body** (method/path/time/nonce
+  only). Loopback deployment mitigates; **passport mode closes it** with
+  Content-Digest. Use passports for anything off-loopback.
+- **The ledger between witness ticks** (default 1 s) has a sub-second window
+  where truncation-before-first-witness is possible; witness-ack gating
+  eliminates it for high-value actions, and the demo convicts everything
+  after the first ack.
+- **Estimation vs truth**: pre-flight reservations use a tokenizer-free
+  estimate; the true cost settles from provider usage. Aborted streams and
+  unreachable providers settle conservatively (never zero) — the cap cannot
+  be reopened by killing a response mid-flight.
+- **Public anchoring is eventual** (OpenTimestamps → Bitcoin, hours). Until
+  the Bitcoin attestation confirms, the certificate reports the anchor as
+  pending — it never overclaims.
+- **A dead witness closes high-value doors.** That is the designed failure
+  mode; the kill switch never depends on the witness.
+- **The solo compose stack runs the witness on the SAME host** (own volume,
+  so other containers can't touch its key — but a host-level attacker owns
+  both sides). Witnessing earns its "not even the operator" strength only
+  when the witness lives on infrastructure the ledger holder doesn't
+  control: team mode, or any second machine.
+- **Approvals ride notification channels** (ntfy by default). On the public
+  ntfy.sh the topic name is the only secret — the gateway warns loudly;
+  self-host the channel for real deployments.
+
+## What Mandare is NOT
+
+Not an AI-safety evaluator, not a content filter, not a sandbox, and not a
+guarantee an agent does *useful* work. It binds actions to identity,
+authority, and evidence — the accountability layer under whatever agents you
+choose to run.

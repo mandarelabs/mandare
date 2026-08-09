@@ -1,0 +1,14 @@
+{
+  "title": "Documentation",
+  "pages": [
+    "index",
+    "quickstart",
+    "concepts",
+    "demos",
+    "self-host",
+    "threat-model",
+    "security",
+    "integrations",
+    "reference"
+  ]
+}

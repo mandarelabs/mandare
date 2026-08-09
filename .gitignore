@@ -12,3 +12,12 @@ coverage/
 *.db-shm
 *.doorkey.pem
 .DS_Store
+
+# S7 packaging artifacts
+__pycache__/
+*.pyc
+apps/docs/.source/
+/bin/
+.next/
+*.masterkey
+*.witnesskey.pem

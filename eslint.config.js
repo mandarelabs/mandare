@@ -15,8 +15,9 @@ export default tseslint.config(
     },
   },
   {
-    // CLI, gateway startup, scripts, and benchmarks talk to humans via stdout by design.
-    files: ['apps/cli/**', 'packages/gateway/src/start.ts', 'scripts/**', 'packages/*/bench/**'],
+    // CLI, gateway startup, scripts, container entries, and benchmarks talk
+    // to humans via stdout by design.
+    files: ['apps/cli/**', 'packages/gateway/src/start.ts', 'scripts/**', 'docker/**', 'packages/*/bench/**'],
     rules: {
       'no-console': 'off',
     },

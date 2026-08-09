@@ -1,0 +1,92 @@
+---
+title: Quickstart
+description: Three commands to a gateway that stops a runaway agent at a budget — no secrets required.
+---
+
+## The 3-command path (docker)
+
+No API keys needed: the stack ships a mock provider, so you see **real
+enforcement** (real mandate, real ledger, real witness) with zero setup.
+
+```bash
+git clone https://github.com/mandarelabs/mandare && cd mandare
+```
+
+```bash
+docker compose up -d --wait
+```
+
+```bash
+docker compose run --rm demo
+```
+
+The demo releases a runaway agent loop against **your** gateway. It will not
+stop on its own — the €20/day mandate stops it: the loop dies mid-run with a
+`403`, the refusal is itself a ledger entry, and `mandare verify` proves the
+chain is valid, the budget counters equal a fresh replay of the ledger, and
+the witnessed head history covers the whole chain.
+
+Then open the dashboard: **http://127.0.0.1:8788** — fleet view, spend per
+agent, the ledger trail, and a working kill button.
+
+What's running:
+
+| Service | Port (loopback only) | Role |
+|---|---|---|
+| `gateway` | 8484 | The door: policy → ledger → provider |
+| `witness` | 9411 | External head history (mock anchor by default) |
+| `dashboard` | 8788 | Fleet view over the ledger |
+| `mock-provider` | — | Stands in for Anthropic/OpenAI (no secrets) |
+
+## Point it at real providers
+
+Put real keys in `.env` (compose picks it up) and override the mock base URL:
+
+```bash
+cp .env.example .env
+# in .env:
+#   ANTHROPIC_API_KEY=sk-ant-...
+#   ANTHROPIC_BASE_URL=https://api.anthropic.com
+docker compose up -d --force-recreate gateway
+```
+
+Your agents keep their existing SDKs — point them at the door:
+
+```ts
+import Anthropic from '@anthropic-ai/sdk';
+const anthropic = new Anthropic({ baseURL: 'http://127.0.0.1:8484' });
+```
+
+Every call is now metered against the mandate and recorded on the ledger.
+For authenticated doors (scoped tokens / passports), see
+[SDKs](/docs/integrations/sdk).
+
+## No docker: the solo installer
+
+```bash
+./install.sh
+```
+
+```bash
+pnpm demo
+```
+
+`install.sh` checks Node ≥ 22.13, installs with a frozen lockfile (install
+scripts stay disabled — see [Security](/docs/security)), builds, and links
+`./bin/mandare`. `pnpm demo` is the same runaway-loop acceptance test CI runs.
+
+## Issue a real mandate
+
+The demo mandate is a generated dev artifact. The real flow takes two
+commands — the human signs once, the gateway enforces every call:
+
+```bash
+./bin/mandare passport issue --agent-name my-agent
+./bin/mandare mandate issue --agent <did:key from above> \
+  --per-tx 5 --per-day 20 --total 100 --approval-above 5 \
+  --out mandate.sdjwt
+MANDARE_MANDATE_PATH=mandate.sdjwt <restart the gateway>
+```
+
+Everything else — vault-backed credentials, witness keys, card rail — is in
+[Self-hosting](/docs/self-host).

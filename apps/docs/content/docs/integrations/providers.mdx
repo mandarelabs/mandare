@@ -1,0 +1,44 @@
+---
+title: Providers
+description: Native wire shapes, base-URL conventions, and how usage truth is established per provider.
+---
+
+The gateway proxies each provider's **native** protocol — agents keep their
+existing SDKs and change only the base URL. No lossy unified transform.
+
+| Route on the door | Provider | Base-URL convention (upstream) |
+|---|---|---|
+| `POST /v1/messages` | Anthropic | `ANTHROPIC_BASE_URL` **without** `/v1` (matches the official SDK) |
+| `POST /v1/chat/completions` | OpenRouter or OpenAI (`MANDARE_CHAT_PROVIDER`) | `OPENAI_BASE_URL` / `OPENROUTER_BASE_URL` **with** `/v1` |
+
+## How spend truth is established
+
+Pre-flight, every call **reserves** a tokenizer-free estimate against the
+mandate inside the ledger transaction. Post-flight, the true cost settles
+from the provider's own accounting:
+
+- **OpenRouter**: `usage.cost` in the response is authoritative (works for
+  streaming too) — the cleanest rail.
+- **OpenAI**: `stream_options.include_usage` is injected on streams; the
+  final usage chunk settles.
+- **Anthropic**: `message_start` (input tokens) merged with the final
+  `message_delta` (output tokens).
+
+Streaming passes through untouched while a tee parses usage. Aborted
+streams, dead sockets, and lying/absent usage settle **conservatively**
+(estimate, never zero) — an agent cannot reopen its cap by killing the
+response. Provider 4xx/5xx (not billed) release the reservation.
+
+## Currency
+
+One ledger currency (default EUR). Provider costs are USD; the conversion
+rate is the operator-set `MANDARE_USD_PER_LEDGER_UNIT` — explicit and
+auditable. Absent it on a non-USD ledger, the spend path stays **closed**:
+Mandare never invents an FX rate.
+
+## OpenRouter per-agent keys (belt + suspenders)
+
+With an OpenRouter Management key, the door can mint **per-agent runtime
+keys with hard USD caps enforced by OpenRouter itself** — an independent
+budget floor even if the door is bypassed entirely. The gateway still meters
+in-path; the cap at OpenRouter is the outer belt.

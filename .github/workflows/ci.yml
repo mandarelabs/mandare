@@ -85,3 +85,63 @@ jobs:
       # selective-disclosure integrity certificate a third party verifies
       # with no ledger access. Real witness server, mock anchor, no secrets.
       - run: pnpm demo:witness
+      # S7 packaging smokes: the compose topology WITHOUT docker (the exact
+      # container entry scripts as local processes), the OpenClaw skill's
+      # documented commands E2E + trust envelope (incl. tamper + signed
+      # cases), and the zero-dep Python client against a real token-auth
+      # door (accept + BAD_POP).
+      - run: pnpm stack-smoke
+      - run: pnpm skill-smoke
+      - run: pnpm sdk-py-smoke
+      - name: Python client unit tests (pinned cross-language vector)
+        run: python3 -m unittest discover -s packages/sdk-py/tests -v
+
+  # S7 clean-machine acceptance: a stranger following ONLY the public docs
+  # gets a running gateway that stops a runaway agent at a budget. The
+  # script asserts the quickstart commands appear VERBATIM in the docs and
+  # README, then executes the documented solo path (./install.sh, pnpm demo)
+  # on a FRESH COPY of the repo. Docs drift or a broken install fails CI.
+  docs-install-smoke:
+    name: docs-install-smoke (fresh copy, documented commands only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm docs-install-smoke
+
+  # S7: the README's ACTUAL 3-command quickstart, in real containers — the
+  # Hacker-News-reader path. Asserts the demo passes AND the dashboard
+  # renders real ledger data from the run.
+  compose-smoke:
+    name: compose-smoke (docker compose quickstart)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker compose up -d --wait
+        timeout-minutes: 15
+      - name: Run the quickstart demo
+        run: |
+          docker compose run --rm demo | tee /tmp/demo.out
+          grep -q "DEMO PASS" /tmp/demo.out
+      - name: Dashboard renders real ledger data
+        run: |
+          curl -sf http://127.0.0.1:8788/ > /tmp/dash.html
+          grep -q "did:mandare:dev-agent" /tmp/dash.html
+          grep -q ">VALID<" /tmp/dash.html
+          # Both the counters badge AND the witness badge must be green —
+          # a red/failed witness badge on the healthy quickstart stack is
+          # the C2 inversion coming back.
+          test "$(grep -o '>CONSISTENT<' /tmp/dash.html | wc -l)" -ge 2
+          curl -sf http://127.0.0.1:8788/trail > /tmp/trail.html
+          grep -q "llm.call.denied" /tmp/trail.html
+      - name: Gateway health + witness reachable
+        run: |
+          curl -sf http://127.0.0.1:8484/healthz
+          curl -sf http://127.0.0.1:9411/healthz
+      - if: always()
+        run: docker compose logs --tail 80 && docker compose down -v

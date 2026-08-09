@@ -1,0 +1,32 @@
+{
+  "name": "@mandarelabs/dashboard",
+  "version": "0.1.0",
+  "description": "Mandare dashboard-lite: local-first fleet view over the ledger — agents, spend, approvals, kill switch. Read-mostly, zero telemetry.",
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "build": "next build",
+    "dev": "next dev --hostname 127.0.0.1 --port 8788",
+    "start": "next start --hostname 127.0.0.1 --port 8788",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@mandarelabs/cli": "workspace:*",
+    "next": "~15.5.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@mandarelabs/ledger": "workspace:*",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "vitest": "^3.0.0",
+    "@mandarelabs/spec": "workspace:*"
+  }
+}

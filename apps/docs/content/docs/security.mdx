@@ -1,0 +1,51 @@
+---
+title: Security & provenance
+description: Supply-chain posture, release signing, reporting vulnerabilities — infrastructure for money must show its work.
+---
+
+## Supply chain
+
+The 2025 npm worm era set the bar; Mandare's posture is the post-worm norm
+done fully:
+
+- **pnpm 10 with install scripts OFF** globally. The single, documented
+  exception is the embedded-Postgres **test** binaries (dev-only, exact-
+  pinned, allowlisted in `pnpm-workspace.yaml`).
+- **Dependency cooldown**: `minimumReleaseAge` refuses versions younger than
+  3 days — a worm's blast radius window.
+- **Frozen lockfile everywhere** (CI and the installer both use
+  `--frozen-lockfile`).
+- **Few dependencies on purpose.** The security-critical primitives are
+  hand-rolled against official vectors with adversarial test suites rather
+  than imported with their dependency trees: RFC 6962 Merkle proofs, did:key
+  + base58, Stripe webhook signatures, the OpenTimestamps client, canonical
+  JSON. The Python client is stdlib-only.
+
+## Releases (from launch)
+
+- npm packages publish via **Trusted Publishing (OIDC)** with provenance —
+  no long-lived tokens exist to steal; 2FA required; token publishing
+  disallowed in package settings.
+- Docker images: **cosign keyless** signatures + build provenance
+  attestations, verifiable with `gh attestation verify`.
+- The OpenClaw skill ships a `clawhub.skill.verify.v1` envelope — sha256 of
+  every file, Ed25519-signed on tagged releases — with a bundled verifier
+  script (`scripts/verify-openclaw-skill.mjs`). ClawHub has no publisher
+  signing chain yet; we ship one anyway.
+- `REPRODUCING.md` documents the honest reproducibility bar: pinned
+  lockfile, provenance, independently rebuildable from a tagged commit — and
+  explicitly does **not** claim bit-for-bit builds.
+
+## Verify, don't trust
+
+Everything a relying party needs to check Mandare's claims is Apache-2.0 and
+embeddable, so you can verify without running our stack: the chain verifier,
+the passport verification, the witness protocol (incl. certificate
+verification), and the spec's canonical forms. `mandare verify` and
+`mandare certify verify` are thin CLIs over those libraries.
+
+## Reporting a vulnerability
+
+Use GitHub **Private Vulnerability Reporting** on the repository (see
+`SECURITY.md`). Safe harbor for good-faith research; coordinated disclosure
+within 90 days. Please do not open public issues for security reports.

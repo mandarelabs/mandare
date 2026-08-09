@@ -41,6 +41,7 @@
   "devDependencies": {
     "@mandarelabs/verifier": "workspace:*",
     "@mandarelabs/witness": "workspace:*",
-    "vitest": "^3.0.0"
+    "vitest": "^3.0.0",
+    "@mandarelabs/sdk": "workspace:*"
   }
 }

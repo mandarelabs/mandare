@@ -1,0 +1,73 @@
+---
+title: CLI reference
+description: Every mandare command — verification, certificates, issuance, the kill switch, the witness.
+---
+
+Exit codes everywhere: `0` success/valid · `1` invalid or error · `2` usage.
+Add `--json` for machine-readable output where noted.
+
+## `mandare verify --db <path>`
+
+Hash chain, door signatures, RFC 6962 tree head.
+
+| Flag | Meaning |
+|---|---|
+| `--spend` | spend trail + budget-counter invariant (counters == fresh replay) |
+| `--door-key <hex>` | out-of-band door key → authorship, not just consistency |
+| `--key-directory <path\|url>` | JWKS key directory (multi-door, rotation windows) |
+| `--prev-head <size>:<root>` | recorded head → rollback/rewrite detection |
+| `--witness <url> --witness-key <hex>` | check against the external witnessed head history (truncation/rewrites) |
+| `--prove <seq>` | inclusion proof for one entry (selective disclosure) |
+| `--json` | full machine-readable report |
+
+Without an out-of-band key source, verification is **self-anchored**: it
+proves internal consistency, not authorship — the CLI says so on every run.
+
+## `mandare certify` / `mandare certify verify <file>`
+
+Build the integrity certificate (chain valid · witnessed · anchored) over
+owner-selected entries (`--disclose 3,17,42`); undisclosed entries stay
+salted hashes. `certify verify` re-derives every proof-backed check with
+**no ledger access**; recorder-attested claims are labeled, never silently
+passed.
+
+## `mandare kill` · `mandare reinstate`
+
+```bash
+mandare kill <agent-did> [--reason <text>]
+mandare kill --mandate <id>     # the permission slip dies; the agent survives
+mandare kill --all              # halt the whole door
+mandare reinstate <agent-did>
+```
+
+Local, offline, fail-closed. Writes the revocation entry + flips the
+projection in one transaction, revokes the actor's vault tokens, revokes
+bound virtual cards (and best-effort cancels them at Stripe). The gateway
+refuses the subject on its next request.
+
+## Issuance
+
+```bash
+mandare passport issue --agent-name <label> [--valid-days n] [--json]
+mandare mandate issue --agent <did:key> --out <file> \
+  [--per-tx u] [--per-day u] [--per-task u] [--total u] \
+  [--approval-above u] [--valid-hours h] [--currency EUR] [--json]
+mandare token issue --actor <did> --mandate <id> [--ttl seconds] [--json]
+```
+
+Cap flags are WHOLE currency units. Token TTL ceiling is 30 minutes; the
+`pop_secret` prints exactly once.
+
+## `mandare witness serve`
+
+The open reference witness: content-free head submissions
+(consistency-enforced), signed acks, aggregate anchoring
+(`--anchor ots|mock`), optional static hosting of the key directory and the
+IETF status list. Prints its public key at startup — distribute it
+out-of-band.
+
+## `mandare vault` · `mandare directory`
+
+`vault import-env` bootstraps provider keys into the encrypted vault (then
+remove them from `.env`); `vault list` shows names only. `directory` builds
+the RFC 9421 key-directory JWKS from door key PEMs.

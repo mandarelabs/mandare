@@ -1,0 +1,10 @@
+{
+  "extends": ["//"],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": [".next/**", "!.next/cache/**"],
+      "env": ["NEXT_TELEMETRY_DISABLED"]
+    }
+  }
+}

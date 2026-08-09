@@ -1,0 +1,55 @@
+---
+title: OpenClaw skill
+description: A native AgentSkills skill — budget awareness, honest refusal handling, proofs, and the kill switch for OpenClaw agents.
+---
+
+OpenClaw has no native MCP client, so Mandare ships a **native skill**
+(`integrations/openclaw/mandare/`). The `SKILL.md` follows the AgentSkills
+format — the same directory also works as a Claude Code skill — with a
+`metadata.openclaw` block declaring required binaries and env.
+
+## What the agent learns
+
+**Visibility and the kill switch — never authority.**
+
+- Check remaining budget before expensive work
+  (`mandare verify --spend`), and stop early when the mandate clearly
+  cannot cover the task.
+- Treat gateway refusals as the product working: report the code
+  (`PER_DAY_EXCEEDED`, `AGENT_REVOKED`, …) and the `denied_entry` receipt —
+  **never** route around a refusal, scavenge credentials, or retry-storm.
+- Produce proofs for the human: full verification, witness check, integrity
+  certificates.
+- Kill spend on request (its own, or a subordinate agent's) — closing doors
+  is always allowed.
+- Refuse to issue passports/mandates/tokens or reinstate anything: those are
+  operator actions, and the skill explains why (an agent that can widen its
+  own permissions has no permissions at all).
+
+## Install (pre-ClawHub)
+
+Until the ClawHub listing goes live at launch, install from the repo:
+
+```bash
+cp -r integrations/openclaw/mandare ~/.openclaw/skills/mandare   # OpenClaw
+cp -r integrations/openclaw/mandare .claude/skills/mandare       # Claude Code
+```
+
+The agent environment needs the `mandare` CLI on PATH (from
+[`install.sh`](/docs/quickstart#no-docker-the-solo-installer)) and
+`MANDARE_LEDGER_DB` set.
+
+## Trust before installing
+
+Skill packages carry a `clawhub.skill.verify.v1` envelope — sha256 of every
+file, Ed25519-signed on tagged releases — plus `SHA256SUMS` in the GitHub
+release. Verify any downloaded copy:
+
+```bash
+node scripts/verify-openclaw-skill.mjs <skill-directory>
+```
+
+ClawHub scans uploads, but has no publisher signing chain — this envelope is
+deliberately ahead of the platform norm, and CI executes every command the
+skill documents against a real gateway so the instructions cannot drift from
+the product.

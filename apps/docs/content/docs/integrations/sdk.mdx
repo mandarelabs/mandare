@@ -1,0 +1,67 @@
+---
+title: SDKs
+description: Keep your existing Anthropic/OpenAI SDK — add a signed fetch. TypeScript first-class, Python for token mode.
+---
+
+## TypeScript — `@mandarelabs/sdk` (Apache-2.0)
+
+The core surface is one function: `createMandareFetch` returns a
+fetch-compatible function that authenticates every request for a Mandare
+door. Hand it to your existing SDK:
+
+```ts
+import Anthropic from '@anthropic-ai/sdk';
+import { createMandareFetch, loadPassportIdentity } from '@mandarelabs/sdk';
+
+const identity = await loadPassportIdentity('my-agent.passport.sdjwt', 'my-agent.agent-key.json');
+
+const anthropic = new Anthropic({
+  baseURL: 'http://127.0.0.1:8484',
+  apiKey: 'unused-the-door-holds-the-real-key',
+  fetch: createMandareFetch({ auth: { mode: 'passport', identity } }),
+});
+// Every request is now RFC-9421-signed with a Content-Digest over the exact
+// body bytes; the door verifies WHO acted and meters it against the mandate.
+```
+
+Token mode (S3 scoped tokens) is the lighter path:
+
+```ts
+import { MandareGateway, MandareRefusedError, tokenCredentialsFromIssueJson } from '@mandarelabs/sdk';
+import { readFileSync } from 'node:fs';
+
+const credentials = tokenCredentialsFromIssueJson(readFileSync('agent.token.json', 'utf8'));
+const gateway = new MandareGateway({ baseUrl: 'http://127.0.0.1:8484', auth: { mode: 'token', credentials } });
+
+try {
+  const reply = await gateway.messages({ model: 'claude-haiku-4-5', max_tokens: 256, messages: [...] });
+} catch (error) {
+  if (error instanceof MandareRefusedError) {
+    // The door said no — error.refusal.code, and the refusal's own ledger
+    // entry hash in error.refusal.denied_entry. Report it; don't route around it.
+  }
+}
+```
+
+Bodies that cannot be digest-signed exactly (streams, FormData) are refused
+client-side before sending — fail closed, clear error.
+
+## Python — `mandare-sdk` (Apache-2.0, zero dependencies)
+
+Stdlib-only client for **token mode** and dev mode:
+
+```python
+from mandare_sdk import MandareClient, MandareRefused, load_token_file
+
+client = MandareClient("http://127.0.0.1:8484", load_token_file("agent.token.json"))
+try:
+    reply = client.messages({"model": "claude-haiku-4-5", "max_tokens": 256,
+                             "messages": [{"role": "user", "content": "hi"}]})
+except MandareRefused as refusal:
+    print(refusal.code, refusal.denied_entry)
+```
+
+**Stated limit:** passport mode needs Ed25519, which the Python stdlib does
+not provide — use the TypeScript SDK for passport-authenticated agents. A
+pinned cross-language HMAC vector in both test suites keeps the two clients
+byte-compatible with the vault's wire contract.

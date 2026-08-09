@@ -1,0 +1,21 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mandare-sdk"
+version = "0.1.0"
+description = "Python client for the Mandare gateway - scoped-token signed requests against an accountable LLM door"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+requires-python = ">=3.10"
+# Zero runtime dependencies on purpose (supply-chain posture, Q24):
+# everything is Python stdlib (hmac, hashlib, urllib, json, secrets).
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/mandarelabs/mandare"
+
+[tool.hatch.build.targets.wheel]
+packages = ["mandare_sdk"]

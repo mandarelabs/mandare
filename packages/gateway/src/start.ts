@@ -198,13 +198,27 @@ const tokenAuth =
 // The Host allowlist stops browser DNS-rebinding, not direct clients that set
 // their own Host header. Binding off-loopback WITHOUT token auth leaves the
 // spend routes reachable by any host on the network — refuse to do it quietly.
+// The ONE sanctioned exception is an explicit, loud operator opt-out for
+// container deployments where the network namespace is the boundary and the
+// published port is loopback-scoped (compose.yaml sets it, with the
+// justification next to it). Silence is never an option; this banner is.
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+const allowInsecureBind = process.env.MANDARE_GATEWAY_ALLOW_INSECURE_BIND === '1';
 if (!LOOPBACK_HOSTS.has(config.host.toLowerCase()) && !tokenAuth) {
-  console.error(
-    `mandare gateway: refusing to bind non-loopback host '${config.host}' without token auth — ` +
-      'set MANDARE_GATEWAY_AUTH=token (and use a vault) or bind 127.0.0.1 (fail-closed).'
+  if (!allowInsecureBind) {
+    console.error(
+      `mandare gateway: refusing to bind non-loopback host '${config.host}' without token auth — ` +
+        'set MANDARE_GATEWAY_AUTH=token (and use a vault), bind 127.0.0.1, or — ONLY when the ' +
+        'network boundary lives elsewhere (container network + loopback-published ports) — set ' +
+        'MANDARE_GATEWAY_ALLOW_INSECURE_BIND=1 (fail-closed).'
+    );
+    process.exit(1);
+  }
+  console.warn(
+    `mandare gateway: WARNING — bound to non-loopback '${config.host}' WITHOUT request auth ` +
+      '(MANDARE_GATEWAY_ALLOW_INSECURE_BIND=1). Anything that can reach this port can spend under ' +
+      'the mandate. Acceptable ONLY behind a container/network boundary; never expose this port.'
   );
-  process.exit(1);
 }
 
 const address = await app.listen({ host: config.host, port: config.port });

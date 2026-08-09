@@ -1,0 +1,59 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
+  "name": "com.mandarelabs/mandare",
+  "description": "Accountability door for AI agent fleets: verify the tamper-evident ledger, check budgets, issue passports/mandates/tokens, kill a runaway agent — local-first, offline-capable.",
+  "repository": {
+    "url": "https://github.com/mandarelabs/mandare",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registry_type": "npm",
+      "registry_base_url": "https://registry.npmjs.org",
+      "identifier": "@mandarelabs/mcp-server",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environment_variables": [
+        {
+          "name": "MANDARE_LEDGER_DB",
+          "description": "Path to the Mandare ledger database this MCP server verifies and kills against",
+          "is_required": true,
+          "is_secret": false
+        },
+        {
+          "name": "MANDARE_MCP_HOME",
+          "description": "Directory where issued artifacts (mandates, credentials, token grant files) are written",
+          "is_required": false,
+          "is_secret": false
+        },
+        {
+          "name": "MANDARE_WITNESS_URL",
+          "description": "Witness server URL — enables truncation/rewrite checks and certificate export",
+          "is_required": false,
+          "is_secret": false
+        },
+        {
+          "name": "MANDARE_WITNESS_PUBLIC_KEY",
+          "description": "The witness's Ed25519 public key (64 hex chars), obtained out-of-band",
+          "is_required": false,
+          "is_secret": false
+        },
+        {
+          "name": "MANDARE_GATEWAY_URL",
+          "description": "Running gateway base URL — enables the gateway health tool",
+          "is_required": false,
+          "is_secret": false
+        },
+        {
+          "name": "MANDARE_MCP_ALLOW_REINSTATE",
+          "description": "Set to 1 to expose the reinstate tool (off by default; kills only close doors)",
+          "is_required": false,
+          "is_secret": false
+        }
+      ]
+    }
+  ]
+}

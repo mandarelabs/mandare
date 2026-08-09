@@ -1,0 +1,58 @@
+---
+title: MCP server
+description: Expose the Mandare door to Claude Code, Claude Desktop, or any MCP host — verify, budgets, issuance, kill.
+---
+
+`@mandarelabs/mcp-server` is a **stdio** MCP server (official
+`@modelcontextprotocol/sdk`) that adapts the `mandare` CLI — the same local
+authority surface an operator uses.
+
+## Setup (Claude Code / Desktop)
+
+```json
+{
+  "mcpServers": {
+    "mandare": {
+      "command": "node",
+      "args": ["<checkout>/packages/mcp-server/dist/main.js"],
+      "env": {
+        "MANDARE_LEDGER_DB": "/path/to/mandare-ledger.db",
+        "MANDARE_MCP_HOME": "/path/to/mandare-artifacts",
+        "MANDARE_GATEWAY_URL": "http://127.0.0.1:8484"
+      }
+    }
+  }
+}
+```
+
+After npm launch this becomes `npx @mandarelabs/mcp-server`. Vault settings
+(`MANDARE_VAULT*`) and witness settings (`MANDARE_WITNESS_URL` +
+`MANDARE_WITNESS_PUBLIC_KEY`) go in `env` the same way.
+
+## Tools
+
+| Tool | What it does |
+|---|---|
+| `mandare_verify` | Full verification report (chain, spend, revocations; optional witness check) |
+| `mandare_budget_status` | Per-mandate settled/reserved + counters==replay — "can I afford this?" |
+| `mandare_issue_passport` | New agent identity; artifacts written to `MANDARE_MCP_HOME`, never into chat |
+| `mandare_issue_mandate` | Owner-signed caps for an agent |
+| `mandare_issue_token` | Scoped token; the secret goes to a 0600 file, the tool returns its PATH |
+| `mandare_kill` | The kill switch (agent / mandate / all) |
+| `mandare_certify` | Selective-disclosure integrity certificate |
+| `mandare_gateway_health` | Live door health |
+
+## Security posture
+
+- **The model never chooses paths.** Ledger, vault, home directory, witness
+  and gateway URLs come exclusively from the server's environment (your MCP
+  host config). Tool arguments are schema-validated and passed as discrete
+  argv — no shell.
+- **Secrets stay out of model context.** Token grants and private keys are
+  written 0600 into `MANDARE_MCP_HOME` and referenced by path.
+- **Kill is always available; reinstate is opt-in**
+  (`MANDARE_MCP_ALLOW_REINSTATE=1`). A compromised MCP host may close doors,
+  not reopen them.
+
+The registry manifest (`server.json`, namespace `com.mandarelabs`) ships in
+the package; publication to the MCP registry happens at launch.

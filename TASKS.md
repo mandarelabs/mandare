@@ -1196,7 +1196,261 @@ S0–S5 floor untouched). Fixed same session with regression/red-team tests:
 
 ---
 
-## → S7 handoff (packaging + distribution)
+## S7 — Packaging & distribution surfaces (2026-08-09)
+
+**Scope (per S6 handoff + Q17/Q18/Q26/Q28/Q29):** MCP server · OpenClaw
+native skill · TS SDK (+ Python client) · `docker compose up` self-host +
+one-line solo installer · dashboard-lite · Fumadocs docs site · clean-machine
+install smoke as CI · release.yml upgraded (dry-run only). NOTHING published
+to any registry (repo private until S9).
+
+**Status: complete.** All surfaces functional and test-proven E2E against the
+real system; clean-machine install smoke + compose smoke enforced in CI;
+MCP server and OpenClaw skill exercised end-to-end (a live gateway door is
+killed through each); dashboard renders real ledger data (asserted in CI on
+the compose stack); docs build green. Code Reviewer pass done (2 CRITICAL +
+1 HIGH + 5 MEDIUM + 6 LOW — ALL fixed same session, zero open). Full local
+gate green (build/typecheck/lint+license/test/red-team/smoke/demo×5 + four
+new S7 smokes). S0–S6 red-team floor and Demos 1–5 frozen and green.
+`packages/spec` untouched (R6).
+
+### Done
+
+- **`packages/sdk`** (Apache-2.0) — the adoption path is ONE function:
+  `createMandareFetch` returns a fetch-compatible signer for the door's auth
+  modes (S3 token PoP headers; S4 passport RFC 9421 + Content-Digest via the
+  Apache `@mandarelabs/passport` — never importing AGPL). Hand it to the
+  official Anthropic/OpenAI SDK as `fetch` and keep your code. Plus
+  `MandareGateway` (typed refusals: `MandareRefusedError` normalizes the 403
+  `reasons[]` and 401 `reason` shapes), `loadPassportIdentity`,
+  `tokenCredentialsFromIssueJson`. Fail-closed on unsignable bodies
+  (streams/FormData refuse client-side before sending).
+  **Wire-contract discipline:** the PoP preimage/encoding is re-stated (not
+  imported — license direction) and `packages/gateway/test/sdk-auth.test.ts`
+  is the drift alarm: real vault-minted token + real passport rig against a
+  LISTENING door — accept, BAD_POP (raw + typed via the client), and
+  body-swap-under-signature (BODY_DIGEST_MISMATCH) all proven.
+- **`packages/sdk-py`** (Apache-2.0, zero dependencies, NOT a workspace
+  member): stdlib-only Python client for token mode + dev mode
+  (`MandareClient`, `MandareRefused`, `load_token_file`). Passport mode
+  needs Ed25519 → stated TS-only limit, not hidden. A PINNED cross-language
+  HMAC vector sits in both test suites; `pnpm sdk-py-smoke` runs the client
+  against a real vault-backed token door (accept + BAD_POP).
+- **`packages/mcp-server`** (AGPL) — Q17: stdio server on
+  `@modelcontextprotocol/sdk` v1, a THIN adapter over the CLI (one authority
+  surface, no second code path). Tools: verify, budget_status,
+  issue_passport/mandate/token, kill, certify, gateway_health. Posture:
+  paths/vault/witness config from OPERATOR env only — no tool accepts a
+  filesystem path (R4); tool args zod-validated and passed as discrete argv
+  (no shell); token grants written 0600 into `MANDARE_MCP_HOME` and returned
+  BY PATH — `pop_secret` never enters model context (R2), `redactSecrets` as
+  belt; **kill always on, reinstate opt-in** (`MANDARE_MCP_ALLOW_REINSTATE=1`,
+  tool invisible otherwise) — a compromised MCP host may close doors, not
+  reopen them. E2E test drives a LIVE gateway: spend → budget shows it →
+  MCP kill → 403 AGENT_REVOKED → verify proves the trail. `server.json`
+  (namespace `com.mandarelabs`) prepared, NOT published.
+- **`integrations/openclaw`** (Apache-2.0) — Q18: native AgentSkills
+  `SKILL.md` (serves OpenClaw via `metadata.openclaw` AND Claude Code) that
+  shells to the CLI. Doctrine: **visibility and the kill switch, never
+  authority** — budget checks, honest refusal handling (never route around a
+  refusal), proofs/certificates, kill; issuance + reinstate are explicitly
+  operator actions the skill refuses to run. Trust envelope
+  `clawhub.skill.verify.v1`: sha256 per file + Ed25519 signature over the
+  canonical core (packaging + independent verifier scripts); verifier
+  refuses hash mismatches, ADDED files, and doctored SHA256SUMS.
+  `pnpm skill-smoke` executes the documented commands VERBATIM against a
+  live door (kill bites: 403 AGENT_REVOKED) and proves envelope
+  tamper/injection/signing cases. Not published to ClawHub.
+- **Self-host** — `Dockerfile` (single image, four roles) + `compose.yaml`:
+  gateway + witness (own private state volume; public key handed off via the
+  shared volume) + dashboard + mock provider + one-shot `demo` service. The
+  quickstart is 3 commands and needs ZERO secrets — the mock provider stands
+  in while enforcement (mandate, ledger, witness, refusal-at-cap) is real.
+  Real providers via `.env` (key + base URL). All host ports loopback-only.
+  `install.sh` = solo path (node ≥22.13 gate, frozen lockfile, repo-local
+  `./bin/mandare`, no sudo). `scripts/stack-smoke.mjs` runs the EXACT
+  container entry scripts as local processes (compose parity grep-asserted
+  against compose.yaml) — the no-docker proof; the real docker path runs in
+  CI (`compose-smoke`).
+- **`apps/dashboard`** (AGPL, Next 15) — read-mostly fleet view: agents +
+  revocation state, per-mandate settled/reserved (today/total), approval
+  trail, paged ledger trail, and verification badges that shell the REAL
+  `mandare verify --spend [--witness] --json` (10s cache) — the dashboard
+  renders what an auditor's command proves, not a parallel truth. ONE write:
+  the kill button → `mandare kill` via the CLI. Host allowlist middleware
+  (DNS-rebinding guard mirroring the gateway's). Zero telemetry, system
+  fonts, loopback bind by default. Data layer tested against a REAL ledger
+  built by the actual store + projectors; badge translation unit-tested with
+  fork/rollback fixtures.
+- **`apps/docs`** (Fumadocs, Q26) — quickstart (the 3-command path,
+  smoke-enforced), concepts, the five demos, self-hosting (vault bootstrap,
+  witness key out-of-band, PG team mode), threat model WITH the honest
+  residuals table, security/provenance page (Q24/Q25 posture), integrations
+  (SDK/MCP/OpenClaw/providers), CLI + env reference. Builds statically
+  (13 pages + search route); content tests pin the quickstart commands.
+- **CI** — `docs-install-smoke` job: asserts the quickstart commands appear
+  VERBATIM in docs + README, then executes the documented solo path
+  (`./install.sh`, `pnpm demo`) on a FRESH COPY of the repo with a 10-minute
+  ceiling — Demo 1 reproduced from public docs only. `compose-smoke` job:
+  the real `docker compose up -d --wait` + `docker compose run --rm demo` +
+  asserts the dashboard renders real ledger data (agent DID, chain VALID,
+  BOTH green CONSISTENT badges) and gateway/witness health. The smoke job
+  additionally runs stack/skill/sdk-py smokes + Python unit tests.
+- **`release.yml`** — dry-run-only upgrade: `pnpm publish --dry-run` (pnpm,
+  NOT npm — it rewrites `workspace:*`), pack artifacts with a
+  workspace-protocol leak gate, skill packaging + SHA256SUMS, docker build
+  (no push), `publish=true` hard-fails until S9. OIDC permission kept.
+
+### Decisions (S7 latitude; BUILD-DECISIONS untouched)
+
+1. **MCP server + dashboard shell to the CLI instead of growing a library
+   surface.** The CLI is the product's local authority; one code path means
+   the MCP/dashboard can never take a less-verified shortcut. (Dashboard
+   resolution had to be bundler-proof — see review notes.)
+2. **The skill grants visibility, never authority.** An agent that can mint
+   its own mandates has no mandates; issuance/reinstate are operator-only,
+   and the SKILL.md says so as instruction, not implication. Kill stays
+   available to agents (closing doors is always allowed).
+3. **MCP secrets go to 0600 files, never model context** (R2 applied to a
+   new boundary): `mandare_issue_token` returns the grant file PATH; the
+   test asserts mode 0600 and no `pop_secret` in tool output.
+4. **Compose dry-run is the default experience**: mock provider + generated
+   dev mandate, zero secrets, REAL enforcement — same posture as CI demos
+   since S2. Real providers are an explicit `.env` opt-in (key + base URL
+   together, so a real key can never silently hit the mock).
+5. **Non-loopback bind opt-out** (`MANDARE_GATEWAY_ALLOW_INSECURE_BIND=1`):
+   the S3 refuse-to-bind guard stays; container topologies where the network
+   namespace is the boundary take an EXPLICIT env opt-out that logs a loud
+   warning. compose.yaml carries the justification inline (review C1).
+6. **Version pins for the doc stack**: next ~15.5 + fumadocs 15/11 (the
+   API surface verified against installed types) + a scoped `@orama/orama`
+   3.1.14 override and a files-thunk shim in `lib/source.ts` for a
+   fumadocs-mdx↔core pairing bug inside the compatible peer range. All
+   drop out at the S9 dependency pass (fumadocs 16 / next 16).
+7. **Skill/MCP/registry artifacts are PREPARED, not published** — namespace
+   `com.mandarelabs` (mandarelabs.com DNS verification at launch;
+   `io.github.mandarelabs` is the documented fallback). Founder confirms at
+   S9.
+8. **sdk-py lives outside the pnpm workspace** (no package.json → invisible
+   to turbo/license tooling); its Apache status is recorded in LICENSING.md
+   and its tests run as an explicit CI step. Zero-dep stdlib is the
+   supply-chain posture extended to Python.
+
+### Deviations from BUILD-DECISIONS
+
+None. (Q17 stdio + env auth + registry manifest honored; Q18's skill format
++ trust envelope honored and exceeded with signing; Q26 Fumadocs; Q28
+Next.js App Router; Q29's README shape. Q24's publish flow is staged in
+release.yml but intentionally not armed — publishing is an S9 launch act.)
+
+### Review pass (Code Reviewer subagent, full S7 diff)
+
+2 CRITICAL + 1 HIGH + 5 MEDIUM + 6 LOW; explicitly confirmed clean: PoP wire
+contract across all three implementations (vector independently recomputed),
+license boundary (sdk → passport only), MCP R2/R4 posture (no path args, no
+shell, 0600 grants, reinstate gating), dashboard SQL parameterization +
+schema/key parity with the ledger, compose port scoping + witness-key
+handoff fail-closed, install.sh hygiene, smokes' assertions. ALL findings
+fixed same session:
+
+- **(C1)** compose.yaml ran the gateway on 0.0.0.0 without token auth — the
+  S3 fail-closed guard (correctly) refuses that, so the flagship 3-command
+  quickstart could not boot (reviewer reproduced). Fixed via decision 5
+  (explicit loud opt-out set only in compose.yaml, justification inline);
+  guard message now names the option.
+- **(C2)** the dashboard witness badge derived "consistent" from a SUBSTRING
+  match — `'inconsistent'` contains `'consistent'`, so a REWRITTEN ledger
+  rendered a green witness badge (and healthy states rendered red). Fixed:
+  typed `consistency.status` parsing ('extended'/'identical' are the only
+  green states; absent record fails closed), extracted as a pure function
+  with fork/rollback/no-record fixture tests, and the compose-smoke CI job
+  now asserts BOTH green CONSISTENT badges on the healthy stack.
+- **(H1)** stack-smoke claimed compose parity while quietly binding
+  127.0.0.1 (masking C1). Now runs 0.0.0.0 + the same opt-out and
+  grep-asserts the security-relevant compose.yaml lines it mirrors.
+- **(M1)** release dry-run used npm, which does NOT rewrite `workspace:*` —
+  the S9 flip would have shipped uninstallable tarballs with green CI.
+  Switched to `pnpm publish/pack` + a tarball grep gate for the protocol.
+- **(M2)** dashboard had no DNS-rebinding defense while exposing fleet data
+  and the kill action. Host-allowlist middleware added (loopback +
+  `MANDARE_DASHBOARD_ALLOWED_HOSTS`), tested.
+- **(M3)** the skill envelope ignored ADDED files and a doctored
+  SHA256SUMS. Verifier now enumerates the directory (uncovered file ⇒ FAIL)
+  and recomputes SHA256SUMS from the envelope; injection case in the smoke.
+- **(M4)** the TS SDK never surfaced 401 auth refusals as typed
+  `MandareRefusedError` (singular `reason` shape); normalized both shapes +
+  a live-door test via the client (python client already handled both).
+- **(M5)** README/threat-model overclaimed the witness for the solo compose
+  topology (witness key on the same host). Claims scoped; residual added to
+  the threat model; witness state moved to its OWN volume so at least other
+  containers cannot touch its key.
+- **(LOWs)** `.dockerignore` now excludes `.env.*`; skill README's verify
+  example targets a packaged dir and the verifier gives a clean
+  not-a-packaged-skill error; MCP server accepts `MANDARE_WITNESS_PUBLIC_HEX`
+  key files (docs said so; now true); `__pycache__`/`.source`/`bin`/
+  masterkey patterns gitignored; sdk-py docstring attribution fixed; MCP
+  witness-unconfigured error paths pinned by tests.
+
+### Known debt (intentional, scheduled)
+
+- **Compose/docker layer is CI-proven, not locally proven** (no container
+  runtime on the dev machine): compose-smoke in CI is the binding check.
+- Dashboard reads SQLite only (PG team-mode dashboard reads later); trail
+  pagination is simple seq-cursor; kill button E2E is covered via the CLI
+  path + CI compose assertions, not a browser test.
+- Docs stack pins (next 15 / fumadocs 15 / orama override / files-thunk
+  shim) drop out at the S9 dependency pass.
+- Docker image is one fat image with dev node_modules (fast first `up`);
+  slim per-service images via `pnpm deploy` are launch work.
+- The `witness-live-smoke` against the public OTS calendar pool (S6 debt)
+  still awaits a founder run; unchanged this session.
+- Per-sync O(n) witness tree recompute + multi-witness config knob (S6
+  debt) — untouched, still scheduled S8+.
+
+---
+
+## → S8 handoff (parallel security/contract/red-team review before launch)
+
+S8 is the Agent-Teams review phase (BUILD-DECISIONS session plan): several
+INDEPENDENT full-context reviewers over the now-complete system, before S9
+launch prep. Suggested split (adjust as the session sees fit):
+
+1. **Crypto/protocol reviewer** — spec canonical forms, ledger chain +
+   RFC 6962 proofs, passport/did:key/SD-JWT, RFC 9421 profile, witness
+   protocol + certificate, OTS client parse bounds. Hunt for
+   cross-component assumptions no single session could see.
+2. **Spend-path reviewer** — reservation/settlement/true-up across gateway
+   AND card rail, projection invariants, approval waivers, kill semantics,
+   witness-ack gating; try to make money move without a matching entry.
+3. **Packaging/supply-chain reviewer** — S7's surfaces with fresh eyes:
+   SDK wire contracts, MCP tool posture (R4/R2), skill envelope, compose
+   defaults, release.yml, dependency tree audit (Q24 posture), the
+   `MANDARE_GATEWAY_ALLOW_INSECURE_BIND` opt-out's blast radius.
+4. **Docs/claims reviewer** — every doc claim vs code (the S7 reviewer
+   caught overclaims; do it systematically), threat-model completeness,
+   REPRODUCING.md honesty.
+
+Binding for S8: the red-team floor (S0–S7, both drivers) and Demos 1–5 are
+frozen; findings get fixed same-session or become explicit, scheduled debt
+with founder sign-off; TASKS.md logs every finding + resolution. Before S9:
+the full-history secret scan (gitleaks) + commit-message review per the
+publicity boundary, and the S9 checklist below.
+
+**From the founder — needed for S9 (not blocking S8):**
+
+- Confirm MCP/npm namespace: `com.mandarelabs` + `@mandarelabs/*` (DNS
+  verification against mandarelabs.com) — S7 prepared manifests under it.
+- Enable npm Trusted Publishing on the `mandarelabs` org + repo secrets for
+  the release key (`MANDARE_RELEASE_KEY_PEM`) when armed.
+- OpenTimestamps live-smoke (S6 debt) and the Stripe Issuing test-mode
+  toggle + webhook-timeout default (S5 debt) remain open founder items.
+- OpenRouter `disableKey` belt into `mandare kill` (S3 debt) — still the
+  oldest open item; S8 could close it if the founder supplies the per-agent
+  key-hash mapping decision.
+
+---
+
+## → S7 handoff (packaging + distribution) — ORIGINAL (fulfilled — see the S7 log above)
 
 The accountability stack is functionally complete: Passport (WHO) · Mandate +
 approvals (MAY) · Ledger + spend/revocation projections (DID) · vault + kill

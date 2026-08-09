@@ -1,0 +1,77 @@
+---
+title: Self-hosting
+description: The compose stack in detail — real provider keys via the vault, witness key handling, team mode.
+---
+
+The [quickstart](/docs/quickstart) stack is a real deployment in miniature.
+This page is what changes when you leave dry-run.
+
+## Real credentials: the vault
+
+CI and the dry-run stack run with **zero secrets**. For real spend, put
+provider keys in the vault, not in env files an agent process can read:
+
+```bash
+# one-time bootstrap: reads keys from .env INTO the vault, then delete them from .env
+MANDARE_VAULT_BACKEND=file ./bin/mandare vault import-env
+./bin/mandare vault list        # names only, never values
+```
+
+Run the gateway with `MANDARE_VAULT=1` and it sources the door key and all
+provider keys from the vault; nothing agent-reachable holds a raw key. On a
+desktop the master key lives in the **OS keychain** (default backend); in
+containers/headless use `MANDARE_VAULT_BACKEND=file` — a 0600 master-key
+file, permission-checked on every read. The compose file mounts `/data` for
+exactly this.
+
+Agents then authenticate with **scoped tokens** (`mandare token issue`,
+≤30 min TTL, proof-of-possession) or **passports** — see
+[SDKs](/docs/integrations/sdk).
+
+## The witness key is out-of-band ON PURPOSE
+
+A witness cannot vouch for itself over its own channel. In the compose
+stack, solo mode shortcuts this honestly: the witness writes its public key
+to the shared volume (`/data/witness/public.hex`) — one machine, one trust
+domain. **In team mode, run the witness on different infrastructure** and
+carry `MANDARE_WITNESS_PUBLIC_KEY` over a real out-of-band channel (the
+witness prints it at startup). Anything that arrives from the witness's own
+HTTP endpoint is not a trust anchor.
+
+Switch the anchor from `mock` to real OpenTimestamps with
+`MANDARE_WITNESS_ANCHOR=ots` (outbound HTTPS to the public calendar pool;
+Bitcoin confirmation takes hours and the certificate reports it honestly).
+
+## Team mode: Postgres
+
+The ledger has first-class Postgres support with the same red-team suite as
+SQLite: `provisionPgLedger` creates the schema with append-only triggers and
+INSERT-only grants for the app role. Point the door at Postgres for
+multi-node fleets; keep ONE writing door per ledger. The dashboard currently
+reads SQLite directly (Postgres dashboard reads are on the roadmap).
+
+## Exposure rules the door enforces
+
+- The gateway binds `127.0.0.1` by default and **refuses to bind a
+  non-loopback host without token/passport auth**.
+- The compose file publishes every port on `127.0.0.1` only. Put your own
+  TLS/auth reverse proxy in front for anything shared, and treat dashboard
+  access as operator access (its kill button is real). Inside the compose
+  network, containers reach each other unauthenticated by design — the
+  namespace is the boundary; the gateway takes an explicit, logged opt-out
+  (`MANDARE_GATEWAY_ALLOW_INSECURE_BIND=1`) for exactly that topology.
+- The dashboard enforces its own Host allowlist (loopback +
+  `MANDARE_DASHBOARD_ALLOWED_HOSTS`) as a DNS-rebinding guard, mirroring the
+  gateway's.
+- The Host allowlist (`MANDARE_GATEWAY_ALLOWED_HOSTS`) is a DNS-rebinding
+  guard for browsers, not an auth boundary — auth is tokens/passports.
+
+## Updating
+
+```bash
+git pull && docker compose up -d --build
+```
+
+The ledger, vault, mandate, and witness state live in the `mandare-data`
+volume and survive rebuilds. Verify after every update:
+`docker compose run --rm demo` or `mandare verify --spend --witness …`.

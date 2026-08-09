@@ -1,0 +1,42 @@
+{
+  "name": "@mandarelabs/mcp-server",
+  "version": "0.1.0",
+  "description": "Mandare MCP server — expose the accountability door (verify, budgets, passports, mandates, kill) to any MCP host over stdio",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "server.json"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "mandare-mcp": "./dist/main.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.test.json --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@mandarelabs/cli": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@mandarelabs/ledger": "workspace:*",
+    "vitest": "^3.0.0",
+    "@mandarelabs/gateway": "workspace:*"
+  }
+}

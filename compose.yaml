@@ -1,0 +1,146 @@
+# Mandare self-host (S7, SPEC §11/§12 solo-in-docker): gateway door + witness
+# + dashboard, working OUT OF THE BOX with no secrets — provider calls go to
+# the bundled mock so the enforcement demo runs dry. Point it at real
+# providers by setting ANTHROPIC_API_KEY *and* ANTHROPIC_BASE_URL (or the
+# OpenAI/OpenRouter pair) in `.env` — compose picks it up automatically.
+#
+# Quickstart (the README's 3 commands):
+#   git clone https://github.com/mandarelabs/mandare && cd mandare
+#   docker compose up -d --wait
+#   docker compose run --rm demo
+#
+# Then open http://127.0.0.1:8788 for the dashboard.
+#
+# Everything binds to 127.0.0.1 on the host — a Mandare door is local
+# infrastructure, not a public service.
+
+name: mandare
+
+services:
+  witness:
+    build: .
+    init: true
+    command: ["node", "docker/witness-entry.mjs"]
+    environment:
+      # The witness DB and PRIVATE key live on the witness's OWN volume —
+      # the gateway/dashboard containers never mount it. Only the PUBLIC key
+      # is published onto the shared volume. (Solo-mode honesty: everything
+      # is still one host — a host-level attacker owns both. Team mode moves
+      # the witness off-machine; see docs: self-hosting.)
+      MANDARE_WITNESS_DB: /witness-state/witness.db
+      MANDARE_WITNESS_KEY: /witness-state/witness-key.pem
+      MANDARE_WITNESS_PUBLIC_HEX: /data/witness/public.hex
+      # 'mock' anchors locally (offline-friendly default); switch to 'ots'
+      # for real OpenTimestamps → Bitcoin anchoring (outbound HTTPS).
+      MANDARE_WITNESS_ANCHOR: ${MANDARE_WITNESS_ANCHOR:-mock}
+    volumes:
+      - mandare-witness-state:/witness-state
+      - mandare-data:/data
+    ports:
+      - "127.0.0.1:9411:9411"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:9411/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  mock-provider:
+    build: .
+    init: true
+    command: ["node", "scripts/mock-provider.mjs"]
+    environment:
+      MOCK_PORT: "8899"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8899/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  gateway:
+    build: .
+    init: true
+    command: ["node", "docker/gateway-entry.mjs"]
+    environment:
+      MANDARE_LEDGER_DB: /data/ledger.db
+      MANDARE_MANDATE_PATH: /data/mandate.json
+      MANDARE_GATEWAY_HOST: 0.0.0.0
+      MANDARE_GATEWAY_PORT: "8484"
+      # The gateway refuses a non-loopback bind without token auth (R1). In
+      # THIS topology the boundary is the compose network namespace plus the
+      # loopback-scoped published port below — so we take the explicit, loud
+      # opt-out. If you flip the port mapping away from 127.0.0.1, remove
+      # this and run token/passport auth instead (see docs: self-hosting).
+      MANDARE_GATEWAY_ALLOW_INSECURE_BIND: "1"
+      # In-network callers reach this door as http://gateway:8484.
+      MANDARE_GATEWAY_ALLOWED_HOSTS: gateway
+      MANDARE_LEDGER_CURRENCY: ${MANDARE_LEDGER_CURRENCY:-EUR}
+      MANDARE_USD_PER_LEDGER_UNIT: ${MANDARE_USD_PER_LEDGER_UNIT:-1.08}
+      # Demo-mandate caps (WHOLE currency units), used only when no mandate
+      # exists yet at MANDARE_MANDATE_PATH.
+      MANDARE_DEMO_PER_TX: ${MANDARE_DEMO_PER_TX:-5}
+      MANDARE_DEMO_PER_DAY: ${MANDARE_DEMO_PER_DAY:-20}
+      MANDARE_DEMO_TOTAL: ${MANDARE_DEMO_TOTAL:-100}
+      # No secrets by default: the mock provider answers, enforcement is real.
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-http://mock-provider:8899}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-mock-not-a-secret}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-http://mock-provider:8899/v1}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-mock-not-a-secret}
+      MANDARE_WITNESS_URL: http://witness:9411
+      MANDARE_WITNESS_PUBLIC_HEX: /data/witness/public.hex
+      MANDARE_WITNESS_ACK_MODE: ${MANDARE_WITNESS_ACK_MODE:-threshold}
+    volumes:
+      - mandare-data:/data
+    ports:
+      - "127.0.0.1:8484:8484"
+    depends_on:
+      witness:
+        condition: service_healthy
+      mock-provider:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8484/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  dashboard:
+    build: .
+    init: true
+    working_dir: /app/apps/dashboard
+    command: ["node_modules/.bin/next", "start", "--hostname", "0.0.0.0", "--port", "3000"]
+    environment:
+      MANDARE_LEDGER_DB: /data/ledger.db
+      MANDARE_WITNESS_URL: http://witness:9411
+      MANDARE_WITNESS_PUBLIC_HEX: /data/witness/public.hex
+      MANDARE_GATEWAY_URL: http://gateway:8484
+      NEXT_TELEMETRY_DISABLED: "1"
+    volumes:
+      - mandare-data:/data
+    ports:
+      - "127.0.0.1:8788:3000"
+    depends_on:
+      gateway:
+        condition: service_healthy
+
+  # One-shot: `docker compose run --rm demo` — the runaway loop dies at the
+  # cap, the refusal is a ledger entry, verification proves the whole trail
+  # (including against the witness). This is Demo 1 running in your stack.
+  demo:
+    build: .
+    init: true
+    profiles: ["demo"]
+    command: ["node", "scripts/compose-demo.mjs"]
+    environment:
+      MANDARE_GATEWAY_URL: http://gateway:8484
+      MANDARE_LEDGER_DB: /data/ledger.db
+      MANDARE_WITNESS_URL: http://witness:9411
+      MANDARE_WITNESS_PUBLIC_HEX: /data/witness/public.hex
+    volumes:
+      - mandare-data:/data
+    depends_on:
+      gateway:
+        condition: service_healthy
+
+volumes:
+  mandare-data:
+  mandare-witness-state:
