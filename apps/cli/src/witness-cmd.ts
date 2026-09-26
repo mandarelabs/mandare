@@ -6,7 +6,8 @@ import { MockAnchor, OpenTimestampsAnchor, type Anchor } from '@mandarelabs/witn
  * `mandare witness serve` — run the open reference witness (SPEC §3.2).
  * Single tenant, self-hostable: record head submissions, serve witnessed-head
  * lookups + signed acks, anchor the aggregate root on a daily cadence
- * (OpenTimestamps by default; `--anchor mock` for offline/dev).
+ * (OpenTimestamps by default; `--anchor mock` for offline/dev), and upgrade
+ * pending OpenTimestamps receipts to their Bitcoin attestations hourly.
  *
  * The printed public key is what doors and verifiers must receive
  * OUT-OF-BAND (MANDARE_WITNESS_PUBLIC_KEY / --witness-key) — a witness, like
@@ -22,6 +23,9 @@ export interface WitnessServeOptions {
   keyDirectoryPath?: string;
   statusListPath?: string;
 }
+
+/** How often pending OpenTimestamps receipts are re-checked against the calendars. */
+const UPGRADE_INTERVAL_MS = 60 * 60 * 1000;
 
 export async function runWitnessServe(options: WitnessServeOptions): Promise<number> {
   const key = loadOrCreateDoorKey(options.keyPath ?? `${options.dbPath}.witnesskey.pem`);
@@ -62,12 +66,31 @@ export async function runWitnessServe(options: WitnessServeOptions): Promise<num
     console.log('  anchoring on demand only (POST /v1/anchor/run)');
   }
 
+  // OpenTimestamps receipts start `pending`; calendars aggregate into Bitcoin
+  // within hours. Poll them, or no receipt ever reaches Bitcoin (I-5).
+  let upgradeTimer: ReturnType<typeof setInterval> | null = null;
+  if (options.anchor === 'ots') {
+    upgradeTimer = setInterval(() => {
+      witness.runUpgrade().then(
+        (result) => {
+          if (result.confirmed.length > 0) {
+            console.log(`witness: Bitcoin-attested epoch(s) ${result.confirmed.join(', ')}`);
+          }
+        },
+        (error) =>
+          console.error(`witness: upgrade run failed: ${error instanceof Error ? error.message : String(error)}`)
+      );
+    }, UPGRADE_INTERVAL_MS);
+    console.log(`  upgrading pending OpenTimestamps receipts every ${UPGRADE_INTERVAL_MS / 60_000} min`);
+  }
+
   await new Promise<void>((resolve) => {
     for (const signal of ['SIGINT', 'SIGTERM'] as const) {
       process.on(signal, () => resolve());
     }
   });
   if (anchorTimer !== null) clearInterval(anchorTimer);
+  if (upgradeTimer !== null) clearInterval(upgradeTimer);
   await witness.close();
   return 0;
 }

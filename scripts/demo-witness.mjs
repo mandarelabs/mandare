@@ -215,7 +215,7 @@ const anchorRun = await (await fetch(`${witnessUrl}/v1/anchor/run`, { method: 'P
 if (anchorRun.epoch !== 1) fail('expected epoch 1');
 const epoch = await (await fetch(`${witnessUrl}/v1/epochs/latest`)).json();
 log(`[anchor]  epoch 1 aggregate root ${epoch.aggregate.root.slice(0, 16)}… anchored (${epoch.anchor_status}, ${epoch.anchor_kind} adapter)`);
-log('[anchor]  live deployments anchor via OpenTimestamps — same interface, Bitcoin finality');
+log('[anchor]  live deployments anchor via OpenTimestamps — same interface; receipts stay pending until the Bitcoin attestation lands (hours)');
 log();
 
 // 6. The integrity certificate (SPEC §9.4): selective disclosure. ------------

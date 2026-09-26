@@ -4,10 +4,16 @@ import { writeFileSync } from 'node:fs';
 import { afterEach, describe, expect, test } from 'vitest';
 
 import { Ledger } from '@mandarelabs/ledger';
+import { base64UrlToBytes } from '@mandarelabs/spec';
 import { computeTreeHead } from '@mandarelabs/verifier';
 import {
+  OTS_HEADER_MAGIC,
+  OpenTimestampsAnchor,
   WitnessClient,
+  collectBitcoin,
   parseEpochInclusion,
+  parseOtsProof,
+  serializeOtsProof,
   parseSignedHeadAck,
   verifyAggregateInclusion,
   verifyEpochSummary,
@@ -174,5 +180,61 @@ describe('reference witness server', () => {
     const status = await fetch(`${running.url}/v1/status-list`);
     expect(status.status).toBe(200);
     expect(((await status.json()) as { status_list: { bits: number } }).status_list.bits).toBe(1);
+  });
+});
+
+describe('I-5: pending OpenTimestamps receipts are upgraded toward Bitcoin', () => {
+  /** A calendar that answers POST /digest with "pending" and, once `confirmed`, GET /timestamp with a Bitcoin attestation. */
+  function mockCalendar(state: { confirmed: boolean }): typeof fetch {
+    const body = (stamp: Parameters<typeof serializeOtsProof>[0]['timestamp']) => {
+      const digest = new Uint8Array(32);
+      return serializeOtsProof({ digest, timestamp: { ...stamp, msg: digest } }).slice(
+        OTS_HEADER_MAGIC.length + 1 + 1 + 32
+      );
+    };
+    const pending = body({ msg: new Uint8Array(0), attestations: [{ kind: 'pending', uri: 'https://cal.test' }], ops: [] });
+    const bitcoin = body({
+      msg: new Uint8Array(0),
+      attestations: [],
+      ops: [{ op: { op: 'sha256' }, stamp: { msg: new Uint8Array(0), attestations: [{ kind: 'bitcoin', height: 812_345 }], ops: [] } }],
+    });
+    return ((url: Parameters<typeof fetch>[0]) => {
+      const u = String(url);
+      if (u.endsWith('/digest')) return Promise.resolve(new Response(pending, { status: 200 }));
+      return Promise.resolve(state.confirmed ? new Response(bitcoin, { status: 200 }) : new Response('', { status: 404 }));
+    }) as typeof fetch;
+  }
+
+  async function latestEpoch(url: string): Promise<{ anchor_status: string; ots_base64: string | null }> {
+    return (await (await fetch(`${url}/v1/epochs/latest`)).json()) as { anchor_status: string; ots_base64: string | null };
+  }
+
+  test('runUpgrade leaves a still-pending receipt pending, then confirms it once the calendar has a block', async () => {
+    const state = { confirmed: false };
+    running = await startWitness({
+      anchor: new OpenTimestampsAnchor({ calendars: ['https://cal.test'], fetchImpl: mockCalendar(state) }),
+    });
+    const { ledger } = makeLedger(2);
+    await new WitnessClient({
+      url: running.url,
+      signer: ledger.signer(),
+      readEntryHashes: () => Promise.resolve(ledger.entryHashes()),
+      witnessPublicKeyHex: running.key.publicKeyHex,
+    }).sync();
+    expect((await running.witness.runAnchor()).status).toBe('pending');
+
+    expect(await running.witness.runUpgrade()).toEqual({ checked: 1, confirmed: [] });
+    expect((await latestEpoch(running.url)).anchor_status).toBe('pending');
+
+    state.confirmed = true;
+    expect(await running.witness.runUpgrade()).toEqual({ checked: 1, confirmed: [1] });
+    const epoch = await latestEpoch(running.url);
+    expect(epoch.anchor_status).toBe('confirmed');
+    const proof = await parseOtsProof(base64UrlToBytes(epoch.ots_base64 ?? ''));
+    expect(collectBitcoin(proof.timestamp)).toEqual([{ height: 812_345 }]);
+
+    // Frozen once confirmed: nothing left to check.
+    expect(await running.witness.runUpgrade()).toEqual({ checked: 0, confirmed: [] });
+    ledger.close();
   });
 });

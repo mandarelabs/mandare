@@ -15,6 +15,7 @@ import {
   signPayload,
   verifySignedPayload,
   type Anchor,
+  type AnchorReceipt,
   type EpochInclusion,
   type EpochSummary,
   type HeadAckPayload,
@@ -57,6 +58,11 @@ export interface WitnessServer {
   store: WitnessStore;
   /** Snapshot all sources' latest heads into an epoch and anchor its root. */
   runAnchor(): Promise<{ epoch: number; status: string }>;
+  /**
+   * Ask the anchor to upgrade every pending receipt (OpenTimestamps: fetch
+   * the calendars' Bitcoin attestations) and store any progress (I-5).
+   */
+  runUpgrade(): Promise<{ checked: number; confirmed: number[] }>;
   close(): Promise<void>;
 }
 
@@ -222,6 +228,35 @@ export async function buildWitnessServer(options: WitnessServerOptions): Promise
     }
   };
 
+  // Without this, OpenTimestamps receipts stay `pending` forever and never
+  // reach Bitcoin (audit 2026-09, I-5). A failed upgrade leaves the receipt
+  // as it was — honest, retryable on the next run.
+  const runUpgrade = async (): Promise<{ checked: number; confirmed: number[] }> => {
+    const pending = store.pendingEpochs().filter(
+      (row) => row.anchor_kind === options.anchor.kind && row.ots_base64 !== null
+    );
+    const confirmed: number[] = [];
+    for (const row of pending) {
+      const receipt: AnchorReceipt = {
+        kind: options.anchor.kind,
+        digest: row.aggregate.root,
+        status: 'pending',
+        created_at: row.created_at,
+        proof: row.ots_base64 as string,
+        detail: null,
+      };
+      try {
+        const next = await options.anchor.upgrade(receipt);
+        if (next.proof === receipt.proof && next.status === receipt.status) continue;
+        store.setEpochAnchor(row.epoch, { kind: next.kind, status: next.status, otsBase64: next.proof });
+        if (next.status === 'confirmed') confirmed.push(row.epoch);
+      } catch (error) {
+        app.log?.error?.(error);
+      }
+    }
+    return { checked: pending.length, confirmed };
+  };
+
   app.post('/v1/anchor/run', async (_request, reply) => {
     try {
       const result = await runAnchor();
@@ -301,6 +336,7 @@ export async function buildWitnessServer(options: WitnessServerOptions): Promise
     app,
     store,
     runAnchor,
+    runUpgrade,
     close: async () => {
       await app.close();
       store.close();

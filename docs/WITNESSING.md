@@ -95,16 +95,23 @@ prints the real numbers but does not gate on the specific values).
 
 The witness periodically snapshots every source's latest witnessed head into
 an **epoch**: one RFC 6962 tree over all sources, one root. That single root
-is anchored via **OpenTimestamps** (BUILD-DECISIONS Q6): free, keyless,
-Bitcoin finality in hours — fine for a daily cadence. The emitted `.ots`
-receipt is the standard detached-proof format, verifiable by any OTS client.
+is anchored via **OpenTimestamps** (BUILD-DECISIONS Q6): free, keyless, fine
+for a daily cadence. A fresh receipt is **pending**: the calendars fold it
+into a Bitcoin transaction within hours, and the witness polls them hourly
+(`runUpgrade`, I-5) to store the Bitcoin attestation in the epoch receipt.
+The emitted `.ots` receipt is the standard detached-proof format, verifiable
+by any OTS client — and an offline verifier still reports even an upgraded
+receipt as recorder-attested: confirm the block against a Bitcoin node.
 
 - Adapter seam: `Anchor` interface in `@mandarelabs/witness-protocol`.
   `OpenTimestampsAnchor` (live), `MockAnchor` (CI/demos — its receipt says
   loudly it is NOT a public anchor), `BaseAnchor` (declared future EVM
   adapter, deliberately not built).
-- Per-source privacy holds at the aggregate: an inclusion proof reveals
-  hashes only; no source learns another exists.
+- Per-source privacy at the aggregate: an inclusion proof reveals hashes
+  only — never another source's id or head. It does reveal the epoch's leaf
+  count (`aggregate.size`) and this source's position among the id-sorted
+  leaves (`leaf_index`), i.e. how many sources the witness aggregated that
+  epoch (I-2). Both are needed to check the RFC 6962 inclusion proof.
 
 ## The integrity certificate (`mandare certify`, SPEC §9.4)
 

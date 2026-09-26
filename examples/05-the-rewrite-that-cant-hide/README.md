@@ -36,8 +36,10 @@ the witness learned nothing about ledger *contents*: sizes and salted
 The demo then goes two steps further:
 
 - **Public anchoring**: epoch aggregate roots are anchored via
-  OpenTimestamps toward Bitcoin finality, bounding even a
-  witness-and-operator-colluding rewrite in time.
+  OpenTimestamps — pending until the calendars' Bitcoin attestation lands
+  (hours; the witness upgrades receipts hourly) — bounding even a
+  witness-and-operator-colluding rewrite in time. The demo uses the mock
+  anchor, which says so.
 - **`mandare certify`**: a selective-disclosure integrity certificate — a
   third party verifies chain validity, witnessed consistency, and two
   disclosed entries with **no ledger access**; a doctored certificate fails.

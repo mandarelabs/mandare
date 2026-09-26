@@ -73,7 +73,8 @@ consistently; see the [threat model](/docs/threat-model) for that residual.
 ## Anchor (even we can't)
 
 The witness aggregates all sources into one Merkle tree and anchors the root
-publicly (OpenTimestamps → Bitcoin by default). The **integrity certificate**
+publicly (OpenTimestamps by default: a receipt stays pending until the
+calendars' Bitcoin attestation lands, hours later). The **integrity certificate**
 (`mandare certify`) packages selective disclosures with inclusion proofs,
 witnessed-head consistency, and the public anchor — verifiable by a third
 party with **no ledger access** and no trust in Mandare.

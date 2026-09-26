@@ -54,6 +54,8 @@ export {
 } from './anchor.js';
 export {
   DEFAULT_CALENDARS,
+  MAX_CALENDAR_RESPONSE_BYTES,
+  OTS_HEADER_MAGIC,
   OtsError,
   applyOp,
   calendarSubmit,

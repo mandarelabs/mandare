@@ -279,6 +279,14 @@ export class WitnessStore {
     return row === undefined ? null : toEpochRow(row);
   }
 
+  /** Epochs whose anchor receipt is still pending (the upgrade loop's work list, I-5). */
+  pendingEpochs(): EpochRow[] {
+    const rows = this.db
+      .prepare("SELECT * FROM witness_epochs WHERE anchor_status = 'pending' ORDER BY epoch ASC")
+      .all() as Parameters<typeof toEpochRow>[0][];
+    return rows.map(toEpochRow);
+  }
+
   stats(): { sources: number; heads: number; epochs: number } {
     const sources = this.db.prepare('SELECT COUNT(*) AS n FROM witness_sources').get() as { n: number };
     const heads = this.db.prepare('SELECT COUNT(*) AS n FROM witness_heads').get() as { n: number };

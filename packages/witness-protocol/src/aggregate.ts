@@ -8,8 +8,11 @@ import type { HeadSigner } from './signing.js';
  * The anchoring aggregate (SPEC §3.2): one RFC 6962 tree over every source's
  * latest witnessed head, whose single root is what gets publicly anchored.
  * Anchoring N sources costs one public commitment, and each source can prove
- * its own head's inclusion without revealing that any other source exists —
- * the proof path is hashes only.
+ * its own head's inclusion without revealing any other source's id or head —
+ * the proof path is hashes only. The proof does reveal the leaf count N and
+ * this source's index among the id-sorted leaves (both are inputs to the
+ * RFC 6962 check), so a relying party learns how many sources the witness
+ * aggregated in that epoch (audit 2026-09, I-2).
  */
 
 /**
