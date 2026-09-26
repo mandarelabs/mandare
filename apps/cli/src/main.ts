@@ -15,8 +15,11 @@ Usage:
       Verify a ledger's hash chain, door signatures, and RFC 6962 tree head.
       --door-key <hex>          raw Ed25519 door public key (64 hex chars)
                                 from an INDEPENDENT source
-      --key-directory <p|url>   out-of-band key directory (JWKS file or URL);
-                                enables multi-door and key-rotation checks
+      --key-directory <p|url>   out-of-band key directory (JWKS file or https
+                                URL); enables multi-door and key-rotation checks
+      --insecure-directory      allow an http:// key directory (trusted,
+                                isolated networks only — cleartext is
+                                substitutable in transit)
       --prev-head <size>:<root> previously recorded tree head; detects
                                 rollback to an older copy and rewrites
       --prove <seq>             emit an RFC 6962 inclusion proof for one entry
@@ -196,9 +199,13 @@ async function runVerifyCommand(flags: ParsedArgs['flags']): Promise<number> {
   if (doorKey !== undefined && keyDirectory !== undefined) {
     throw new UsageError('--door-key and --key-directory are mutually exclusive');
   }
+  if (flags.has('insecure-directory') && keyDirectory === undefined) {
+    throw new UsageError('--insecure-directory only applies to --key-directory');
+  }
   const options: VerifyOptions = {
     ...(doorKey === undefined ? {} : { doorPublicKey: doorKey }),
     ...(keyDirectory === undefined ? {} : { keyDirectory }),
+    ...(flags.has('insecure-directory') ? { insecureDirectory: true } : {}),
   };
   const prevHead = getString(flags, 'prev-head');
   if (prevHead !== undefined) {

@@ -354,13 +354,20 @@ export async function verifyIntegrityCertificate(
       proof: disclosure.inclusion_proof,
       root: certificate.tree_head.root,
     });
+    // I-1: inclusion in the certified tree is proven either way, but only an
+    // entry at or below the witnessed head was ever seen by the witness —
+    // one past it rests on the recorder's word until the next witnessed head.
+    const witnessed = disclosure.seq <= record.head.size;
     push({
       name,
       ok: included,
-      basis: 'proof',
-      detail: included
-        ? `entry ${disclosure.seq} verifiably included in the certified tree`
-        : 'inclusion proof does NOT reach the certified root',
+      basis: included && !witnessed ? 'recorder-attested' : 'proof',
+      detail: !included
+        ? 'inclusion proof does NOT reach the certified root'
+        : witnessed
+          ? `entry ${disclosure.seq} verifiably included in the certified tree, at or below the witnessed head`
+          : `entry ${disclosure.seq} is included in the certified tree but beyond the witnessed head ` +
+            `(size ${record.head.size}) — recorder-attested, not witnessed`,
     });
   }
 
@@ -469,6 +476,14 @@ export async function verifyIntegrityCertificate(
       anchorDetail = 'aggregate not yet anchored to a public chain';
     }
     push({ name: 'public-anchor', ok: anchorOk, basis: anchorBasis, detail: anchorDetail });
+  } else {
+    // I-1: say so, rather than print nothing about anchoring at all.
+    push({
+      name: 'public-anchor',
+      ok: false,
+      basis: 'recorder-attested',
+      detail: 'certificate carries no public anchor — witnessing only (no anchored epoch covered this source yet)',
+    });
   }
 
   // 6. The recorder-attested claims — labeled, never silently trusted.

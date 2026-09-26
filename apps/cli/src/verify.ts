@@ -55,6 +55,8 @@ export interface VerifyOptions {
   doorPublicKey?: string;
   /** Path or https URL of an out-of-band key directory (JWKS). */
   keyDirectory?: string;
+  /** Accept an http:// key directory (I-3) — only for a trusted, isolated network. */
+  insecureDirectory?: boolean;
   /** Previously recorded head to check append-only consistency against. */
   prevHead?: TreeHead;
   /** Produce an inclusion proof for this seq (1-based). */
@@ -77,8 +79,15 @@ export interface VerifyOptions {
  * directory is that it arrives OUT-OF-BAND — from a path/URL the verifier
  * trusts independently of the ledger file (closes S0 review finding H1).
  */
-async function loadKeyDirectory(source: string): Promise<KeyDirectory> {
+async function loadKeyDirectory(source: string, insecure: boolean): Promise<KeyDirectory> {
   let text: string;
+  // I-3: the directory IS the trust anchor — over cleartext, anyone on the
+  // path substitutes their own key and every forgery verifies.
+  if (source.startsWith('http://') && !insecure) {
+    throw new Error(
+      '--key-directory over http:// is refused — use https:// or a local file (or --insecure-directory on a trusted, isolated network)'
+    );
+  }
   if (source.startsWith('https://') || source.startsWith('http://')) {
     const response = await fetch(source, {
       headers: { accept: 'application/http-message-signatures-directory+json, application/json' },
@@ -109,7 +118,9 @@ export async function runVerify(
   // file access can re-sign the chain under a swapped key, so
   // meta.door_public_key only proves internal consistency, not authorship.
   const directory =
-    options.keyDirectory === undefined ? undefined : await loadKeyDirectory(options.keyDirectory);
+    options.keyDirectory === undefined
+      ? undefined
+      : await loadKeyDirectory(options.keyDirectory, options.insecureDirectory === true);
   const selfAnchored = options.doorPublicKey === undefined && directory === undefined;
   const result: VerifyResult = stored.ok
     ? await verifyChain(
@@ -154,7 +165,10 @@ export async function runVerify(
     selfAnchored
       ? 'anchor:   SELF-ANCHORED — door key taken from the ledger file itself; pass --door-key <hex> or --key-directory <path|url> from an independent source to verify authorship'
       : directory !== undefined
-        ? `anchor:   key directory supplied out-of-band (${directory.keys.length} key${directory.keys.length === 1 ? '' : 's'})`
+        ? `anchor:   key directory supplied out-of-band (${directory.keys.length} key${directory.keys.length === 1 ? '' : 's'})` +
+          (options.keyDirectory?.startsWith('http://') === true
+            ? ' — INSECURE: fetched over cleartext http, substitutable in transit'
+            : '')
         : 'anchor:   door key supplied out-of-band'
   );
 

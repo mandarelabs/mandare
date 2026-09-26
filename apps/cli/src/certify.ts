@@ -328,7 +328,7 @@ export async function runCertifyVerify(
     ...(options.doorPublicKeyHex === undefined ? {} : { doorPublicKeyHex: options.doorPublicKeyHex }),
   });
   if (options.json === true) {
-    process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ ...verdict, residuals: certificate.residuals }, null, 2)}\n`);
   } else {
     for (const check of verdict.checks) {
       // A failing PROOF check is a real FAIL; a not-yet-final recorder-
@@ -337,6 +337,10 @@ export async function runCertifyVerify(
       const mark = check.ok ? 'PASS' : check.basis === 'proof' ? 'FAIL' : 'NOTE';
       const basis = check.basis === 'proof' ? '' : ' [recorder-attested]';
       process.stdout.write(`${mark}  ${check.name}${basis}: ${check.detail}\n`);
+    }
+    // I-1: the residuals are part of what the certificate claims — never hidden.
+    for (const residual of certificate.residuals) {
+      process.stdout.write(`RESIDUAL  ${residual}\n`);
     }
     process.stdout.write(
       verdict.ok

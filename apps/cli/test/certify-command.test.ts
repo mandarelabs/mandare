@@ -194,6 +194,28 @@ describe('mandare certify', () => {
     expect(errors.join('')).toMatch(/source identity is forged/);
   });
 
+  test('I-1: certify verify always prints the anchoring line and the stated residuals', async () => {
+    await startWitness();
+    const { dbPath, ledger } = makeLedger();
+    await stream(ledger, 3);
+    ledger.close();
+    const certPath = tmp('cert.json');
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const outputs: string[] = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+      outputs.push(String(chunk));
+      return true;
+    });
+    expect(await runCertify(process.env, dbPath, certifyArgs(dbPath, { outPath: certPath }))).toBe(0);
+    outputs.length = 0;
+
+    expect(await runCertifyVerify(certPath, { witnessPublicKeyHex: witnessKeyHex })).toBe(0);
+    const text = outputs.join('');
+    expect(text).toMatch(/NOTE {2}public-anchor \[recorder-attested\]: certificate carries no public anchor/);
+    expect(text).toContain('RESIDUAL  ');
+    expect(text).toContain('recorder-side verifier run');
+  });
+
   test('third-party rejects a certificate with a doctored disclosed entry', async () => {
     await startWitness();
     const { dbPath, ledger } = makeLedger();

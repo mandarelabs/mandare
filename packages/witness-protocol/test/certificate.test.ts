@@ -290,6 +290,43 @@ describe('integrity certificate', () => {
     expect(anchor?.detail).toMatch(/not parsed/);
   });
 
+  test('I-1: a disclosure beyond the witnessed head is recorder-attested "not witnessed", not proof', async () => {
+    // Fixture: witnessed head = 4, certified tree = 6, disclosures [2, 5].
+    const { certificate, witnessSigner, doorSigner } = await buildFixture();
+    const verdict = await verifyIntegrityCertificate(certificate, {
+      witnessPublicKeyHex: witnessSigner.publicKeyHex,
+      doorPublicKeyHex: doorSigner.publicKeyHex,
+    });
+    const witnessed = verdict.checks.find((c) => c.name === 'disclosed-entry-seq-2');
+    const beyond = verdict.checks.find((c) => c.name === 'disclosed-entry-seq-5');
+    expect(witnessed).toMatchObject({ ok: true, basis: 'proof' });
+    expect(beyond).toMatchObject({ ok: true, basis: 'recorder-attested' });
+    expect(beyond?.detail).toMatch(/not witnessed/);
+    expect(verdict.ok).toBe(true); // still a sound certificate — graded honestly
+  });
+
+  test('I-1: an unanchored certificate still reports its anchoring (as a NOTE, never gating)', async () => {
+    const { certificate, witnessSigner, doorSigner } = await buildFixture();
+    const unanchored = await buildIntegrityCertificate({
+      ledger: certificate.ledger,
+      treeHead: certificate.tree_head,
+      entryCount: certificate.chain.entries,
+      witness: certificate.witness,
+      anchor: null,
+      disclosed: [],
+      revocation: null,
+      signer: doorSigner,
+    });
+    const verdict = await verifyIntegrityCertificate(unanchored, {
+      witnessPublicKeyHex: witnessSigner.publicKeyHex,
+      doorPublicKeyHex: doorSigner.publicKeyHex,
+    });
+    const anchor = verdict.checks.find((c) => c.name === 'public-anchor');
+    expect(anchor).toMatchObject({ ok: false, basis: 'recorder-attested' });
+    expect(anchor?.detail).toMatch(/no public anchor/i);
+    expect(verdict.ok).toBe(true);
+  });
+
   test('HIGH-2: an attacker-fabricated (unsigned) epoch aggregate is refused', async () => {
     const { certificate, witnessSigner } = await buildFixture();
     const tampered = JSON.parse(JSON.stringify(certificate)) as IntegrityCertificate;

@@ -1,4 +1,5 @@
 import { mkdtempSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -6,7 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, test } from 'vitest';
 
 import { Ledger } from '@mandarelabs/ledger';
-import { LLM_CALL_INTENT } from '@mandarelabs/spec';
+import { LLM_CALL_INTENT, bytesToBase64Url, hexToBytes } from '@mandarelabs/spec';
 
 import { runVerify } from '../src/verify.js';
 
@@ -89,6 +90,26 @@ describe('mandare verify', () => {
     expect(text).toContain('INVALID');
     expect(text).toContain('STORAGE_MISMATCH');
     expect(text).toContain('seq 2');
+  });
+
+  test('I-3: a cleartext http:// key directory is refused unless explicitly marked insecure', async () => {
+    const { dbPath, doorPublicKeyHex } = buildDb(2);
+    const jwks = JSON.stringify({
+      keys: [{ kty: 'OKP', crv: 'Ed25519', x: bytesToBase64Url(hexToBytes(doorPublicKeyHex)) }],
+    });
+    const server = createServer((_req, res) => res.end(jwks));
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as { port: number };
+    const url = `http://127.0.0.1:${port}/.well-known/http-message-signatures-directory`;
+    try {
+      // The out-of-band trust anchor over a channel anyone on the path can rewrite.
+      await expect(runVerify(dbPath, { keyDirectory: url })).rejects.toThrow(/https|insecure/i);
+      const opted = await runVerify(dbPath, { keyDirectory: url, insecureDirectory: true });
+      expect(opted.exitCode).toBe(0);
+      expect(opted.lines.join('\n')).toMatch(/INSECURE/);
+    } finally {
+      server.close();
+    }
   });
 
   test('missing file → throws (main maps to exit 1)', async () => {
