@@ -1765,12 +1765,14 @@ None.
 
 ### Known debt / residuals (open, owners noted)
 
-- **Unpriced OpenRouter models** (incl. `openrouter/auto`) still reserve the
+- ~~**Unpriced OpenRouter models** (incl. `openrouter/auto`) still reserve the
   per-tx cap while the reported cost settles unguarded: one such call can
   settle past the per-tx and day caps. Sibling of S-2, pre-existing S2 design
   (Q14). Options: price every OpenRouter model an operator allows and refuse
   the rest; or inject `provider.max_price` derived from the per-tx cap.
-  Needs a decision — the budget-race red-team fixtures use `openrouter/auto`.
+  Needs a decision — the budget-race red-team fixtures use `openrouter/auto`.~~
+  **RESOLVED in S10-fix 2D** (fail-closed: refused MODEL_UNPRICED; priced
+  calls carry a `provider.max_price` ceiling) — see below.
 - `redacted_thinking` blocks reserve the context window (encrypted,
   plaintext size unknown) — safe, but heavy on 1M-context models.
 - Card rail settles the authorized amount; Stripe over-/force-captures that
@@ -1780,6 +1782,160 @@ None.
 - Docs/claims follow-ups for the docs session: demo captures show the
   4th-decimal reservation drift; "overshoot is prevented by construction"
   needs the unpriced-OpenRouter caveat until the residual above is closed.
+
+---
+
+## S10-fix 2D — OpenRouter spend truth (2026-09-26)
+
+**Scope:** the one residual 2A recorded and did not fix (its first Known-debt
+bullet): OpenRouter calls whose cost the reservation did not bound. The
+reservation is the only cap guard and OpenRouter's reported cost settles a
+call unguarded (Q14), so four holes on this rail let one call settle past the
+per-tx, day and total caps. Reproduced first — `openrouter/auto` answering
+`usage.cost` = $50 under the €5/€20 test mandate returned 200 and settled
+€50 — then fixed test-first. Branch `fix/openrouter-spend` off `main`
+(b45263a, 2A merged). `packages/spec` untouched (R6).
+
+**Status: done.** New red-team suite `test/red-team/openrouter-spend.test.ts`
+(43 tests; 39 failed on `main` before the fix — the 4 that passed are the
+no-double-count guards, which already held). Full local gate green: build ·
+typecheck · lint · test **659** (was 616; gateway 169→212) · red-team **190**
+(was 147; gateway 72→115) · all five demos · smoke / stack-smoke / skill-smoke /
+sdk-py-smoke / docs-install-smoke.
+
+### Done
+
+1. **Unpriced model / fallback** — `reservation.ts`: the OpenRouter exemption
+   is gone. Every candidate (model + `models` fallbacks) needs a row on every
+   provider, else 403 `MODEL_UNPRICED`, recorded, never forwarded.
+   `openrouter/auto` is always unpriced (it routes anywhere) — `findPricing
+   ('openrouter/auto') === null` stays.
+2. **Price ceiling** — `openrouter-spend.ts`: every priced OpenRouter call is
+   forwarded with `provider.max_price` = `{prompt, completion}` at the row's
+   effective rates ($/M, after `scalePricing`), `request: 0`, and `image`
+   ($/image = the row's per-image token ceiling at the input rate) only when
+   the request carries images — that per-image fee is also reserved on top of
+   the image tokens. With fallbacks the reservation and ceiling use a
+   worst-case row (each rate at its max across candidates, window at its
+   min). An agent's own `max_price` merges field by field under `min()`
+   (lower yes, raise never; invalid values and undefined keys dropped);
+   `provider` must be an object (400 otherwise).
+3. **BYOK truth** — `openai-like.ts` `reportedCost`: `is_byok: true` settles
+   `cost + cost_details.upstream_inference_cost`; `is_byok: false` settles
+   `cost` (an upstream figure there is what OpenRouter paid, already inside
+   `cost` — adding it double-counts); `is_byok` absent settles cost + upstream
+   only when upstream > cost (the BYOK signature, the fee being 5% of it). A
+   BYOK block missing either figure is `costIsPartial` → settles
+   max(reservation, what it proves), never at the fee alone. The reservation
+   carries the 5% BYOK fee on top of the list-price bound (`withByokFee`),
+   since the door cannot know up front whether a key is BYOK.
+4. **Fee-adding variants** — `openrouterBaseModel`: only `:free` and
+   `:floor` (can only cost the same or less) map onto the base row; every
+   other suffix — `:online` (web-search fees), `:nitro` (admits priority/fast
+   tiers), `:exacto`, `:thinking`, `:extended`, `:batch`, unknown — is
+   `COST_UNBOUNDED`, even when a row names the suffixed id exactly.
+5. **Default rows** — dotted OpenRouter Claude ids as `aliases` on their
+   dashed rows (fable-5.1, opus-5.5, opus-4.8/4.7/4.6/4.5/4.1, sonnet-4.6/
+   4.5, haiku-4.5), each verified on `openrouter.ai/api/v1/models` with list
+   rates equal to the row.
+6. **Dimensions `max_price` does not name** (verified against
+   `/api/v1/models/{id}/endpoints` for every default Claude row + gpt-5/
+   5-mini/4o-mini/4.1, 2026-09-26: regional endpoints are +10% and the
+   Anthropic fast tier 2× on prompt/completion, with their cache rates scaled
+   by the same factor; cache reads ≤ prompt everywhere; no endpoint lists
+   `internal_reasoning`; Sonnet 4.5 has a long-context override from 200K
+   prompt tokens):
+   - cache writes: `cache_control` anywhere in the body reserves the prompt at
+     the write rate (any non-`5m` TTL at the 1h rate); a row that STATES a
+     write rate reserves at it even without a breakpoint (OpenRouter enables
+     caching by model capability);
+   - long-context overrides: a row's `maxInputTokens` is where its rates stop
+     holding — an OpenRouter request whose input bound reaches it is
+     `COST_UNBOUNDED`, and a row with no window cannot run through OpenRouter;
+   - reasoning: `reasoning.max_tokens` is reserved at the output rate on top
+     of the output cap (OpenRouter: the cap covers reasoning on "most"
+     providers — not all);
+   - web search / plugins / server tools / audio: already refused (2A
+     allowlist + `:online` above).
+7. **Scripts + claims** — `scripts/smoke.mjs` uses `openai/gpt-4o-mini`.
+   `demo-card.mjs`'s row got a window and a rate that makes the €2.50
+   settlement fit its reservation (€2.626 reserved vs the ~€0.003 before —
+   the demo used to settle ~800× its reservation); its mock serves only
+   under the door's ceiling. Demo 4 keeps its numbers (LLM €15.00, card
+   €4.20 approved / €3.00 declined, €19.20 settled). The overshoot sentence
+   in `docs/launch/SHOW-HN.md` and `examples/01-runaway-budget-cap/README.md`
+   now reads "Given a correct price table, …"; `threat-model.mdx:27` claims
+   only the race closure, which is accurate — left as is. The env reference
+   says OpenRouter rows need `maxInputTokens` and become `max_price`.
+
+### Changed test assertions (R5 — nothing deleted, nothing loosened)
+
+The shared chat fixture (`test/helpers.ts` `chatBody`) used `openrouter/auto`,
+whose €5 reservation was the per-tx cap itself. It now uses
+`test/per-tx-sized`, a test row (`$47,619/M` out, input free, 100-token max,
+1M window) that `openTestGateway` loads by default (`TEST_PRICING`, new
+`pricingTable` option); `CHAT_RESERVATION_MICROS` (= 4,999,995) is derived
+from `planReservation` itself.
+- `budget-race` 25-way race: `completed ≥ 4` → `completed ≥ floor(CAP /
+  RESERVATION)` plus a new assertion that this is 4; cap-never-pierced,
+  every-refusal-recorded and projection == replay unchanged.
+- `budget-race` sequential fill + burst: new precondition assertion that the
+  €5.30 remainder fits exactly one reservation; "exactly 1 winner of 10" and
+  settled = 4 × €4.90 unchanged.
+- `budget-race` per-tx bound: `intent ≤ per-tx` kept, plus `intent ===
+  CHAT_RESERVATION_MICROS` (stronger).
+- `gateway.test` budget exhaustion: new assertion that the derived admission
+  count is 7; `completed === 7`, `PER_DAY_EXCEEDED`, 15 entries unchanged.
+- `provider-failure` no-echo test: payload model `openrouter/auto` →
+  `test/per-tx-sized` (an unpriced model is now refused before the throwing
+  reservation under test is reached) and a new `status === 503` assertion.
+- `witness-gate` threshold test: comment only ("just under" the €5
+  threshold, not "far below").
+
+### Decisions (fix-session latitude; BUILD-DECISIONS untouched)
+
+1. **Retired: "OpenRouter is exempt — an unpriced model reserves the full
+   per-tx cap."** It was never a recorded decision, only an S2 code comment
+   (`git show cc55524:packages/gateway/src/server.ts`, line 662). Reserving the
+   cap bounded nothing: settlement is unguarded, so the cap was only the
+   reservation, never the bill. Replaced by the founder's DECISION (fail-
+   closed, this session's prompt): unpriced OpenRouter models are refused
+   like direct ones; operators price the OpenRouter models they allow via
+   `MANDARE_PRICING_PATH`. **Q14 is unchanged** — OpenRouter's reported cost
+   is still authoritative at settlement; it is now also bounded up front.
+2. **Ceiling at the row, not at the per-tx cap** (the Alternative was not
+   chosen): a row-rate ceiling excludes pricier endpoints without the live
+   probe and without a per-dimension proof the cap-derived ceiling needed.
+3. **BYOK fee headroom on every OpenRouter reservation (+5%).** The door
+   cannot see which key an endpoint uses before the call.
+4. **`maxInputTokens` is required for OpenRouter rows.** Without a window the
+   long-context override threshold is unknown, so the call is unbounded.
+5. **No live call.** The non-BYOK `upstream_inference_cost` question was
+   settled from OpenRouter's typed response schema (`is_byok?: boolean`,
+   `cost_details.upstream_inference_cost?`) and the rule is safe either way
+   (`is_byok: false` ⇒ `cost` only); no spend was needed.
+
+### Deviations from BUILD-DECISIONS
+
+None.
+
+### Residuals (open, owners noted)
+
+- "Overshoot is prevented by construction" now holds on the LLM rail **given
+  a correct price table** and OpenRouter honoring its own `max_price` — the
+  same trust Q14 already places in its reported cost. What the table cannot
+  know stays a premise: an endpoint billing cache reads above its prompt
+  rate or cache writes above the row's multiplier (none does today), a new
+  per-use fee on a plain text call, and a BYOK usage block that omits both
+  `is_byok` and the upstream cost (undetectable; settles the fee only).
+- Operator cost of fail-closed: `openrouter/auto`, `~…-latest` aliases and
+  `:nitro`/`:online` variants no longer pass the door; OpenRouter Claude
+  calls reserve input at 1.25× (stated write rate) plus 5%.
+- **For 2C (docs owner):** `examples/01-runaway-budget-cap/README.md:43`
+  claims the race test runs "on SQLite and Postgres", and `threat-model.mdx:27`
+  says "a 20-way race test" — the test is 25-way on SQLite; check both. The
+  threat model could also state the price-table premise explicitly. Only the
+  two overshoot sentences were edited here.
 
 ---
 
