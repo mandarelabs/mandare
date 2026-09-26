@@ -27,7 +27,10 @@ Usage:
       --witness <url>           check the chain against the externally
                                 witnessed head history — catches truncation
                                 and rewrites that self-anchored verification
-                                cannot. Requires --witness-key.
+                                cannot. The history is the VERIFYING key's
+                                (--door-key / --key-directory); without one
+                                it is the source the file names, labeled
+                                self-declared. Requires --witness-key.
       --witness-key <hex>       the witness's raw Ed25519 public key (64 hex),
                                 obtained OUT-OF-BAND
       --json                    machine-readable output

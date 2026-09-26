@@ -11,6 +11,7 @@ import { buildWitnessServer, type WitnessServer } from '@mandarelabs/witness';
 import { MockAnchor, WitnessClient } from '@mandarelabs/witness-protocol';
 
 import { runCertify, runCertifyVerify } from '../src/certify.js';
+import { setMeta } from './helpers/witness-attacks.js';
 
 /**
  * `mandare certify` end-to-end against the REAL witness server: an honest
@@ -175,6 +176,22 @@ describe('mandare certify', () => {
     const code = await runCertify(process.env, dbPath, certifyArgs(dbPath));
     expect(code).toBe(1);
     expect(errors.join('')).toMatch(/fork/i);
+  });
+
+  test('W-1: a repointed door_key_id (fresh-source split timeline) is REFUSED before any lookup', async () => {
+    await startWitness();
+    const { dbPath, ledger } = makeLedger();
+    await stream(ledger, 4);
+    ledger.close();
+    setMeta(dbPath, { door_key_id: loadOrCreateDoorKey(tmp('fresh.pem')).keyId });
+    const errors: string[] = [];
+    vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      errors.push(String(chunk));
+      return true;
+    });
+    const code = await runCertify(process.env, dbPath, certifyArgs(dbPath));
+    expect(code).toBe(1);
+    expect(errors.join('')).toMatch(/source identity is forged/);
   });
 
   test('third-party rejects a certificate with a doctored disclosed entry', async () => {

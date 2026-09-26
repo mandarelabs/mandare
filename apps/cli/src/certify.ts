@@ -2,7 +2,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 
 import { readLedger, replayRevocation } from '@mandarelabs/ledger';
 import { AGENT_STATUS_LIST_ID, buildStatusListPayload } from '@mandarelabs/vault';
-import { isLedgerEntry, type LedgerEntryV1 } from '@mandarelabs/spec';
+import { hexToBytes, isLedgerEntry, sha256HexAsync, type LedgerEntryV1 } from '@mandarelabs/spec';
 import {
   computeTreeHead,
   consistencyProof,
@@ -52,6 +52,17 @@ export async function runCertify(
   options: CertifyOptions
 ): Promise<number> {
   const { meta, entries } = readLedger(dbPath);
+
+  // 0. The certified source must BE the key the chain verifies under (W-1 /
+  //    S8/C1): a repointed door_key_id would fetch — and embed — another
+  //    source's witnessed history. The door context below binds the signing
+  //    key to door_key_id, so all three are one identity.
+  if ((await sha256HexAsync(hexToBytes(meta.door_public_key))) !== meta.door_key_id) {
+    process.stderr.write(
+      'certify: REFUSED — ledger meta door_key_id is not sha256(door_public_key); the source identity is forged\n'
+    );
+    return 1;
+  }
 
   // 1. Full chain verification first — a certificate over an invalid chain
   //    must never exist (the door key comes from the door context below, so

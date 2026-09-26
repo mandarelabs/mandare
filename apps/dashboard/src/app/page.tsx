@@ -62,7 +62,13 @@ export default async function FleetPage() {
               <div className={`value ${badge.witness.consistent ? 'ok' : 'bad'}`}>
                 {badge.witness.consistent ? 'CONSISTENT' : 'CHECK FAILED'}
               </div>
-              <div className="sub">external head history covers this chain</div>
+              <div className="sub">
+                {!badge.witness.consistent
+                  ? badge.witness.detail
+                  : badge.anchor === 'self-anchored'
+                    ? 'SELF-ANCHORED — checked against the source the ledger file names; set MANDARE_DOOR_PUBLIC_KEY to bind it to the door key'
+                    : 'external head history of the out-of-band door key covers this chain'}
+              </div>
             </>
           ) : (
             <>

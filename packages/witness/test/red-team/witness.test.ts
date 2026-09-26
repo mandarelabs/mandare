@@ -109,7 +109,12 @@ function rewriteAndResign(dbPath: string, ledger: Ledger, mutate: (entries: Ledg
   db.close();
 }
 
-/** What `mandare verify --witness` computes, distilled. */
+/**
+ * What `mandare verify --witness` computes, distilled. The source is the
+ * key the chain verifies under — sha256(door_public_key) — never the file's
+ * declared door_key_id (W-1: a repointed id would select an attacker's
+ * parallel timeline). apps/cli's red-team drives the real binary.
+ */
 async function witnessVerdict(
   dbPath: string,
   witness: RunningWitness
@@ -119,7 +124,7 @@ async function witnessVerdict(
   const local = await computeTreeHead(hashes);
   const verified = await fetchVerifiedWitnessedHead({
     url: witness.url,
-    sourceId: meta.door_key_id,
+    sourceId: sha256Hex(hexToBytes(meta.door_public_key)),
     witnessPublicKeyHex: witness.key.publicKeyHex,
   });
   if (verified === null) throw new Error('no witnessed head');

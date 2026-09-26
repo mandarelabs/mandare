@@ -5,25 +5,21 @@ import { readLedger } from '@mandarelabs/ledger';
 import { buildApprovalReport, type ApprovalReport } from './approval-report.js';
 import { buildSpendReport, type SpendReport } from './spend-report.js';
 import { buildRevocationReport, type RevocationReport } from './revocation-report.js';
+import type { LedgerEntryV1 } from '@mandarelabs/spec';
 import {
   computeTreeHead,
-  consistencyProof,
   inclusionProof,
   parseKeyDirectory,
   verifyChain,
-  verifyConsistency,
   type KeyDirectory,
   type TreeHead,
   type VerifyResult,
 } from '@mandarelabs/verifier';
-import { fetchVerifiedWitnessedHead, type WitnessedHeadRecord } from '@mandarelabs/witness-protocol';
 
-/** Result of checking the current tree against a previously recorded head. */
-export type ConsistencyStatus =
-  | { status: 'extended'; prev: TreeHead }
-  | { status: 'identical'; prev: TreeHead }
-  | { status: 'rollback'; prev: TreeHead; reason: string }
-  | { status: 'inconsistent'; prev: TreeHead; reason: string };
+import { checkConsistency, type ConsistencyStatus } from './consistency.js';
+import { bindWitnessSources, checkWitness, type WitnessJson } from './witness-check.js';
+
+export type { ConsistencyStatus } from './consistency.js';
 
 export interface InclusionProofOutput {
   seq: number;
@@ -46,11 +42,7 @@ export interface VerifyCommandOutput {
     result: VerifyResult;
     tree?: TreeHead;
     consistency?: ConsistencyStatus;
-    witness?: {
-      url: string;
-      record: WitnessedHeadRecord | null;
-      consistency: ConsistencyStatus | null;
-    };
+    witness?: WitnessJson;
     inclusion_proof?: InclusionProofOutput;
     spend?: SpendReport['json'];
     approvals?: ApprovalReport['json'];
@@ -72,7 +64,9 @@ export interface VerifyOptions {
    * Check the local chain against the externally witnessed head history
    * (S6). Catches truncation and rewrite that self-anchored verification —
    * and even an out-of-band door key — structurally cannot: the witnessed
-   * head lives where a local attacker can't rewrite it.
+   * head lives where a local attacker can't rewrite it. The history is
+   * looked up under the source the VERIFYING key defines (W-1), so pass
+   * --door-key / --key-directory to make the witness check bind authorship.
    */
   witness?: { url: string; publicKeyHex: string };
 }
@@ -96,43 +90,6 @@ async function loadKeyDirectory(source: string): Promise<KeyDirectory> {
     text = await readFile(source, 'utf8');
   }
   return parseKeyDirectory(JSON.parse(text) as unknown);
-}
-
-async function checkConsistency(
-  entryHashes: string[],
-  current: TreeHead,
-  prev: TreeHead
-): Promise<ConsistencyStatus> {
-  if (current.size < prev.size) {
-    return {
-      status: 'rollback',
-      prev,
-      reason: `ledger shrank from ${prev.size} to ${current.size} entries — rollback to an older copy`,
-    };
-  }
-  if (current.size === prev.size) {
-    return current.root === prev.root
-      ? { status: 'identical', prev }
-      : { status: 'inconsistent', prev, reason: 'same size but different root — history rewritten' };
-  }
-  if (prev.size === 0) {
-    return { status: 'extended', prev };
-  }
-  const proof = await consistencyProof(entryHashes, prev.size);
-  const consistent = await verifyConsistency({
-    size1: prev.size,
-    root1: prev.root,
-    size2: current.size,
-    root2: current.root,
-    proof,
-  });
-  return consistent
-    ? { status: 'extended', prev }
-    : {
-        status: 'inconsistent',
-        prev,
-        reason: 'recorded head is not a prefix of the current tree — history rewritten',
-      };
 }
 
 export async function runVerify(
@@ -222,57 +179,15 @@ export async function runVerify(
   }
 
   if (options.witness !== undefined) {
-    // The witnessed head is the recorded --prev-head nobody on this machine
-    // can rewrite: fetched over the network, signature-verified against the
-    // OUT-OF-BAND witness key, then held to the same RFC 6962 consistency
-    // standard. Truncation shows up as the witnessed head EXCEEDING the
-    // local tree; rewrite as a failed consistency proof.
-    let record: WitnessedHeadRecord | null;
-    try {
-      const verified = await fetchVerifiedWitnessedHead({
-        url: options.witness.url,
-        sourceId: meta.door_key_id,
-        witnessPublicKeyHex: options.witness.publicKeyHex,
-      });
-      record = verified?.record ?? null;
-    } catch (error) {
-      lines.push(
-        `witness:  UNAVAILABLE — ${error instanceof Error ? error.message : String(error)} ` +
-          '(cannot rule out truncation; treat as unverified)'
-      );
-      json.witness = { url: options.witness.url, record: null, consistency: null };
-      return { exitCode: 1, lines, json };
-    }
-    if (record === null) {
-      lines.push(
-        'witness:  NO HISTORY — the witness has never seen this source; nothing to compare against'
-      );
-      json.witness = { url: options.witness.url, record: null, consistency: null };
+    const binding = await bindWitnessSources(meta, entries as LedgerEntryV1[], options, directory);
+    const witnessed = await checkWitness(options.witness, binding, entryHashes, tree);
+    lines.push(...witnessed.lines);
+    json.witness = witnessed.json;
+    if (witnessed.failed) {
       exitCode = 1;
-    } else {
-      const witnessConsistency = await checkConsistency(entryHashes, tree, record.head);
-      json.witness = { url: options.witness.url, record, consistency: witnessConsistency };
-      const headLabel = `${record.head.size}:${record.head.root.slice(0, 12)}… (witnessed ${record.witnessed_at})`;
-      switch (witnessConsistency.status) {
-        case 'extended':
-        case 'identical':
-          lines.push(`witness:  CONSISTENT — local tree extends the witnessed head ${headLabel} append-only`);
-          break;
-        case 'rollback':
-          lines.push(
-            `witness:  TRUNCATION DETECTED — the witness recorded head ${headLabel}, but the local ` +
-              `ledger has only ${tree.size} entries; the newest entries were dropped after being witnessed`
-          );
-          exitCode = 1;
-          break;
-        case 'inconsistent':
-          lines.push(
-            `witness:  FORK DETECTED — the local chain is NOT an append-only extension of the ` +
-              `witnessed head ${headLabel}; history was rewritten after being witnessed`
-          );
-          exitCode = 1;
-          break;
-      }
+    }
+    if (witnessed.unavailable) {
+      return { exitCode: 1, lines, json };
     }
   }
 

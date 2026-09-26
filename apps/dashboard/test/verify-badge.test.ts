@@ -47,6 +47,16 @@ describe('witnessVerdict', () => {
     expect(witnessVerdict(undefined).consistent).toBe(false);
   });
 
+  it('W-1: a source mismatch is RED even when the looked-up history is consistent', () => {
+    const verdict = witnessVerdict({
+      record: HEAD,
+      consistency: { status: 'extended' },
+      source_mismatch: 'the out-of-band door key is source 1234…',
+    });
+    expect(verdict.consistent).toBe(false);
+    expect(verdict.detail).toContain('source mismatch');
+  });
+
   it('unknown future statuses fail closed', () => {
     expect(witnessVerdict({ record: HEAD, consistency: { status: '???' } }).consistent).toBe(false);
   });
@@ -68,6 +78,12 @@ describe('badgeFromVerifyJson', () => {
     );
     expect(badge.chainOk).toBe(true);
     expect(badge.witness.configured && badge.witness.consistent).toBe(false);
+  });
+
+  it('W-1: the badge says whether the door key was out-of-band or self-anchored', () => {
+    const healthy = report({ record: HEAD, consistency: { status: 'extended' } });
+    expect(badgeFromVerifyJson(healthy, true, 'now').anchor).toBe('self-anchored');
+    expect(badgeFromVerifyJson(healthy, true, 'now', 'out-of-band').anchor).toBe('out-of-band');
   });
 
   it('unconfigured witness stays explicitly unconfigured', () => {

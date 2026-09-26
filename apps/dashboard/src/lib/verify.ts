@@ -13,6 +13,12 @@ import { cliPath } from './cli-path';
 
 export interface VerifyBadge {
   checkedAt: string;
+  /**
+   * W-1: 'self-anchored' = the door key came from the ledger file itself, so
+   * a green witness badge only says the file agrees with a source IT names.
+   * Set MANDARE_DOOR_PUBLIC_KEY (out-of-band) to bind the check to the door.
+   */
+  anchor: 'out-of-band' | 'self-anchored';
   chainOk: boolean;
   entries: number;
   treeSize: number | null;
@@ -43,6 +49,16 @@ function witnessConfig(): { url: string; keyHex: string } | null {
   return { url: url.replace(/\/+$/, ''), keyHex };
 }
 
+/**
+ * The door's public key, supplied OUT-OF-BAND (never read from the ledger
+ * file — that is the self-anchored mode this exists to leave). Invalid or
+ * absent ⇒ null ⇒ the badge renders the SELF-ANCHORED caveat.
+ */
+function doorKeyConfig(): string | null {
+  const keyHex = process.env.MANDARE_DOOR_PUBLIC_KEY ?? '';
+  return /^[0-9a-f]{64}$/.test(keyHex) ? keyHex : null;
+}
+
 /** Shape of `mandare verify --json` (apps/cli/src/verify.ts). */
 export interface VerifyJson {
   result: { ok: boolean; entries: number; failure?: { code: string; reason: string } };
@@ -51,6 +67,8 @@ export interface VerifyJson {
   witness?: {
     record: unknown;
     consistency: { status?: string; reason?: string } | null;
+    /** W-1: the file's declared source disagrees with the verifying key. */
+    source_mismatch?: string | null;
   };
 }
 
@@ -64,6 +82,10 @@ export interface VerifyJson {
 export function witnessVerdict(
   witness: VerifyJson['witness']
 ): { consistent: boolean; detail: string } {
+  const mismatch = witness?.source_mismatch;
+  if (typeof mismatch === 'string' && mismatch !== '') {
+    return { consistent: false, detail: `source mismatch: ${mismatch}` };
+  }
   const status = witness?.consistency?.status;
   if (status === 'extended' || status === 'identical') {
     return { consistent: true, detail: status };
@@ -84,11 +106,13 @@ export function witnessVerdict(
 export function badgeFromVerifyJson(
   parsed: VerifyJson,
   witnessConfigured: boolean,
-  checkedAt: string
+  checkedAt: string,
+  anchor: VerifyBadge['anchor'] = 'self-anchored'
 ): VerifyBadge {
   const verdict = witnessVerdict(parsed.witness);
   return {
     checkedAt,
+    anchor,
     chainOk: parsed.result.ok,
     entries: parsed.result.entries,
     treeSize: parsed.tree?.size ?? null,
@@ -108,7 +132,12 @@ export function badgeFromVerifyJson(
 function runVerify(): Promise<VerifyBadge> {
   const db = ledgerDbPath();
   const witness = witnessConfig();
+  const doorKey = doorKeyConfig();
+  const anchor: VerifyBadge['anchor'] = doorKey === null ? 'self-anchored' : 'out-of-band';
   const args = ['verify', '--db', db, '--spend', '--json'];
+  if (doorKey !== null) {
+    args.push('--door-key', doorKey);
+  }
   if (witness !== null) {
     args.push('--witness', witness.url, '--witness-key', witness.keyHex);
   }
@@ -121,10 +150,11 @@ function runVerify(): Promise<VerifyBadge> {
         const checkedAt = new Date().toISOString();
         try {
           const parsed = JSON.parse(stdout) as VerifyJson;
-          resolve(badgeFromVerifyJson(parsed, witness !== null, checkedAt));
+          resolve(badgeFromVerifyJson(parsed, witness !== null, checkedAt, anchor));
         } catch {
           resolve({
             checkedAt,
+            anchor,
             chainOk: false,
             entries: 0,
             treeSize: null,
