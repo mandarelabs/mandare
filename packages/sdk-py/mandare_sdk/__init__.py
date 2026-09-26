@@ -23,7 +23,7 @@ import json
 import secrets
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
@@ -49,10 +49,14 @@ POP_HEADER = "x-mandare-pop"
 
 @dataclass(frozen=True)
 class TokenCredentials:
-    """A scoped token grant: public id + the secret revealed once at mint."""
+    """A scoped token grant: public id + the secret revealed once at mint.
+
+    The secret is kept out of ``repr``/``str`` so it cannot leak through
+    logs, tracebacks or f-strings (R2); only the public token id shows.
+    """
 
     token_id: str
-    pop_secret: str
+    pop_secret: str = field(repr=False)
 
 
 def _b64url(raw: bytes) -> str:

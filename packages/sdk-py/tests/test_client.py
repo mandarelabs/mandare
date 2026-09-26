@@ -78,5 +78,19 @@ class HeadersTest(unittest.TestCase):
         self.assertNotEqual(first["x-mandare-nonce"], second["x-mandare-nonce"])
 
 
+class SecretHygieneTest(unittest.TestCase):
+    """R2: the PoP secret never reaches logs, tracebacks or f-strings (S-7)."""
+
+    def test_repr_and_str_do_not_reveal_the_secret(self) -> None:
+        creds = TokenCredentials(token_id="tok_visible", pop_secret="pop-SECRET-value")
+        for rendered in (repr(creds), str(creds), f"{creds}", f"{creds!r}", f"{[creds]}"):
+            self.assertNotIn("pop-SECRET-value", rendered)
+            self.assertIn("tok_visible", rendered)  # the public id stays debuggable
+
+    def test_the_secret_still_signs(self) -> None:
+        creds = TokenCredentials(token_id=PINNED["token_id"], pop_secret=PINNED["secret"])
+        self.assertEqual(creds.pop_secret, PINNED["secret"])
+
+
 if __name__ == "__main__":
     unittest.main()
