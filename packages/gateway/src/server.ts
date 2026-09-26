@@ -50,14 +50,7 @@ import {
   type GatewayVault,
 } from './auth.js';
 import { authenticatePassportRequest } from './passport-auth.js';
-import {
-  estimateUsdMicros,
-  findPricing,
-  estimateTokensFromUtf8Bytes,
-  usdMicrosToLedgerMicros,
-  DEFAULT_PRICING,
-  type ModelPricing,
-} from './pricing.js';
+import { DEFAULT_PRICING, type ModelPricing } from './pricing.js';
 import { anthropicAdapter } from './providers/anthropic.js';
 import { openaiAdapter, openrouterAdapter } from './providers/openai-like.js';
 import type { FetchLike, ProviderAdapter } from './providers/types.js';
@@ -67,6 +60,13 @@ import {
   streamSettlement,
   type SettlementPlan,
 } from './settlement.js';
+import { planReservation } from './reservation.js';
+import {
+  anthropicMessagesBodySchema,
+  openaiChatBodySchema,
+  openrouterChatBodySchema,
+  spendRouteSchemaError,
+} from './request-schemas.js';
 import { SseParser } from './sse.js';
 import { drainedOrDone, nextChunk, timeoutReason } from './stream-io.js';
 import { WitnessGate, type WitnessAckClient } from './witness-gate.js';
@@ -141,28 +141,6 @@ const STREAM_IDLE_TIMEOUT_MS = 120_000;
  */
 const REVOKED_DENIED_THROTTLE_MS = 1_000;
 
-const chatCompletionsBodySchema = Type.Object(
-  {
-    model: Type.String({ minLength: 1 }),
-    messages: Type.Array(Type.Unknown(), { minItems: 1 }),
-    stream: Type.Optional(Type.Boolean()),
-    max_tokens: Type.Optional(Type.Integer({ minimum: 1 })),
-    max_completion_tokens: Type.Optional(Type.Integer({ minimum: 1 })),
-  },
-  { additionalProperties: true }
-);
-
-const anthropicMessagesBodySchema = Type.Object(
-  {
-    model: Type.String({ minLength: 1 }),
-    messages: Type.Array(Type.Unknown(), { minItems: 1 }),
-    // Anthropic requires max_tokens — which also bounds our reservation.
-    max_tokens: Type.Integer({ minimum: 1 }),
-    stream: Type.Optional(Type.Boolean()),
-  },
-  { additionalProperties: true }
-);
-
 interface CallPlan extends SettlementPlan {
   adapter: ProviderAdapter;
   endpoint: ProviderEndpoint;
@@ -229,7 +207,13 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
 
   // coerceTypes OFF: this is a policy boundary — `stream: "true"` must be a
   // 400, not a silent boolean (R4; caught by the hostile-input red-team).
-  const app = Fastify({ logger: false, ajv: { customOptions: { coerceTypes: false } } });
+  // removeAdditional OFF: Fastify's default silently DELETES fields a closed
+  // schema does not list; an unmeterable field must be a loud 400 naming it,
+  // not a request quietly rewritten into a different one (S-2).
+  const app = Fastify({
+    logger: false,
+    ajv: { customOptions: { coerceTypes: false, removeAdditional: false } },
+  });
 
   if (passportMode) {
     // RFC 9421 Content-Digest must be checked against the EXACT bytes the
@@ -328,9 +312,15 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
     }
   );
 
+  // Spend routes forward only the fields the door can price (R4, S-2).
   app.post(
     '/v1/chat/completions',
-    { schema: { body: chatCompletionsBodySchema } },
+    {
+      schema: {
+        body: config.chatProvider === 'openrouter' ? openrouterChatBodySchema : openaiChatBodySchema,
+      },
+      schemaErrorFormatter: spendRouteSchemaError,
+    },
     async (request, reply) => {
       const chat = config.chatProvider === 'openrouter' ? config.openrouter : config.openai;
       const adapter = config.chatProvider === 'openrouter' ? openrouterAdapter : openaiAdapter;
@@ -340,7 +330,7 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
 
   app.post(
     '/v1/messages',
-    { schema: { body: anthropicMessagesBodySchema } },
+    { schema: { body: anthropicMessagesBodySchema }, schemaErrorFormatter: spendRouteSchemaError },
     async (request, reply) => handleLlmCall(anthropicAdapter, config.anthropic, request, reply)
   );
 
@@ -514,7 +504,6 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
       return reply.code(400).send({ error: 'request body is not canonicalizable JSON' });
     }
 
-    const pricing = findPricing(model, pricingTable);
     const providerHost = new URL(endpoint.baseUrl).host;
 
     // Identity + kill switch. Two mode-dependent shapes with one outcome: a
@@ -661,18 +650,25 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
       }
     }
 
-    if (pricing === null && adapter.name !== 'openrouter') {
-      // No price → no metering → no spend (R1). OpenRouter is exempt: its
-      // response cost is authoritative, so we reserve the full per-tx cap.
+    // The reservation must bound EVERYTHING the provider can bill (S-2):
+    // unpriced models on direct providers and billable parts the door cannot
+    // bound are refused — recorded, never forwarded (R1).
+    const reservationPlan = planReservation({
+      adapter,
+      body,
+      model,
+      pricingTable,
+      perTxMaxMicros: scopeSelection.per_tx_max,
+      usdPerLedgerUnit: config.usdPerLedgerUnit,
+    });
+    if (!reservationPlan.ok) {
       return await recordDenied(reply, {
         actor,
         requestHash,
         target: providerHost,
         estimateLedgerMicros: 0,
-        code: 'MODEL_UNPRICED',
-        reasons: [
-          `model '${model}' has no pricing entry — cannot meter it (fail-closed); extend MANDARE_PRICING_PATH`,
-        ],
+        code: reservationPlan.code,
+        reasons: [reservationPlan.reason],
       });
     }
 
@@ -683,15 +679,9 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
       model,
       stream,
       requestHash,
-      pricing,
-      estimateLedgerMicros:
-        pricing === null
-          ? scopeSelection.per_tx_max
-          : usdMicrosToLedgerMicros(
-              estimateUsdMicros({ body, pricing }),
-              config.usdPerLedgerUnit
-            ),
-      inputTokensBound: estimateTokensFromUtf8Bytes(Buffer.byteLength(JSON.stringify(body), 'utf8')),
+      pricing: reservationPlan.pricing,
+      estimateLedgerMicros: reservationPlan.estimateLedgerMicros,
+      inputTokensBound: reservationPlan.inputTokensBound,
       scope: scopeSelection,
       usdPerLedgerUnit: config.usdPerLedgerUnit,
     };

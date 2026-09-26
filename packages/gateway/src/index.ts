@@ -8,21 +8,27 @@ export { loadConfigFromEnv, loadMandate } from './config.js';
 export type { GatewayConfig, ProviderEndpoint } from './config.js';
 export {
   DEFAULT_PRICING,
+  REQUEST_OVERHEAD_TOKENS,
   costUsdMicros,
+  estimateRequest,
   estimateTokensFromUtf8Bytes,
   estimateUsdMicros,
   findPricing,
   loadPricingTable,
   usdMicrosToLedgerMicros,
 } from './pricing.js';
-export type { ModelPricing, UsageTokens } from './pricing.js';
+export type { ModelPricing, RequestEstimate, UsageTokens } from './pricing.js';
+export { planReservation } from './reservation.js';
+export type { ReservationPlan } from './reservation.js';
 export { anthropicAdapter } from './providers/anthropic.js';
 export { createOpenAiLikeAdapter, openaiAdapter, openrouterAdapter } from './providers/openai-like.js';
 export type {
   FetchLike,
   ParsedUsage,
+  ProfileResult,
   ProviderAdapter,
   ProviderName,
+  RequestProfile,
   StreamUsageParser,
 } from './providers/types.js';
 export { SseParser } from './sse.js';

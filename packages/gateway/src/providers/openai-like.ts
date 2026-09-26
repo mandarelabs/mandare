@@ -1,4 +1,5 @@
 import type { SseEvent } from '../sse.js';
+import { OPENAI_IMAGE_TOKENS_MAX, profileChatRequest } from './openai-profile.js';
 import {
   asRecord,
   emptyUsage,
@@ -101,6 +102,7 @@ export function createOpenAiLikeAdapter(name: Extract<ProviderName, 'openai' | '
   return {
     name,
     endpointPath: '/chat/completions',
+    imageTokensCeiling: OPENAI_IMAGE_TOKENS_MAX,
     headers(apiKey: string): Record<string, string> {
       return {
         authorization: `Bearer ${apiKey}`,
@@ -118,6 +120,7 @@ export function createOpenAiLikeAdapter(name: Extract<ProviderName, 'openai' | '
       }
       return prepared;
     },
+    profileRequest: (body) => profileChatRequest(body, name),
     parseUsageFromJson(bodyText): ParsedUsage | null {
       const usage = asRecord(asRecord(safeJson(bodyText))?.usage);
       return usage === null ? null : usageFromRecord(usage);

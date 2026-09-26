@@ -1,5 +1,7 @@
 import { readFileSync } from 'node:fs';
 
+import { PLAIN_TEXT_PROFILE, type RequestProfile } from './providers/types.js';
+
 /**
  * Model pricing for pre-flight cost RESERVATION and for token-based true-up
  * on providers that do not return an authoritative cost (Anthropic, OpenAI).
@@ -22,23 +24,33 @@ export interface ModelPricing {
   outUsdPerM: number;
   /** Defaults: write 1.25× input, read 0.1× input (both providers' shape). */
   cacheWriteUsdPerM?: number;
+  /** 1-hour-TTL cache write (Anthropic). Default: 2× input. */
+  cacheWrite1hUsdPerM?: number;
   cacheReadUsdPerM?: number;
   /** Hard model output ceiling — the reservation bound when the request sets no max. */
   maxOutputTokens: number;
+  /**
+   * Context window (input tokens). Bounds a request carrying media whose
+   * token cost its bytes do not show (PDFs, uploaded files): absent ⇒ such a
+   * request is refused, never reserved at a guess (S-2).
+   */
+  maxInputTokens?: number;
+  /** Per-image token ceiling for this model; absent ⇒ the provider's documented maximum. */
+  maxImageTokens?: number;
 }
 
 export const DEFAULT_PRICING: readonly ModelPricing[] = [
-  { prefix: 'claude-haiku-4-5', inUsdPerM: 1, outUsdPerM: 5, maxOutputTokens: 64_000 },
-  { prefix: 'claude-sonnet-4-5', inUsdPerM: 3, outUsdPerM: 15, maxOutputTokens: 64_000 },
-  { prefix: 'claude-opus-4-5', inUsdPerM: 5, outUsdPerM: 25, maxOutputTokens: 64_000 },
-  { prefix: 'claude-opus-4-1', inUsdPerM: 15, outUsdPerM: 75, maxOutputTokens: 32_000 },
-  { prefix: 'gpt-5-nano', inUsdPerM: 0.05, outUsdPerM: 0.4, maxOutputTokens: 128_000 },
-  { prefix: 'gpt-5-mini', inUsdPerM: 0.25, outUsdPerM: 2, maxOutputTokens: 128_000 },
-  { prefix: 'gpt-5', inUsdPerM: 1.25, outUsdPerM: 10, maxOutputTokens: 128_000 },
-  { prefix: 'gpt-4o-mini', inUsdPerM: 0.15, outUsdPerM: 0.6, maxOutputTokens: 16_384 },
-  { prefix: 'gpt-4o', inUsdPerM: 2.5, outUsdPerM: 10, maxOutputTokens: 16_384 },
-  { prefix: 'gpt-4.1-mini', inUsdPerM: 0.4, outUsdPerM: 1.6, maxOutputTokens: 32_768 },
-  { prefix: 'gpt-4.1', inUsdPerM: 2, outUsdPerM: 8, maxOutputTokens: 32_768 },
+  { prefix: 'claude-haiku-4-5', inUsdPerM: 1, outUsdPerM: 5, maxOutputTokens: 64_000, maxInputTokens: 200_000 },
+  { prefix: 'claude-sonnet-4-5', inUsdPerM: 3, outUsdPerM: 15, maxOutputTokens: 64_000, maxInputTokens: 200_000 },
+  { prefix: 'claude-opus-4-5', inUsdPerM: 5, outUsdPerM: 25, maxOutputTokens: 64_000, maxInputTokens: 200_000 },
+  { prefix: 'claude-opus-4-1', inUsdPerM: 15, outUsdPerM: 75, maxOutputTokens: 32_000, maxInputTokens: 200_000 },
+  { prefix: 'gpt-5-nano', inUsdPerM: 0.05, outUsdPerM: 0.4, maxOutputTokens: 128_000, maxInputTokens: 400_000 },
+  { prefix: 'gpt-5-mini', inUsdPerM: 0.25, outUsdPerM: 2, maxOutputTokens: 128_000, maxInputTokens: 400_000 },
+  { prefix: 'gpt-5', inUsdPerM: 1.25, outUsdPerM: 10, maxOutputTokens: 128_000, maxInputTokens: 400_000 },
+  { prefix: 'gpt-4o-mini', inUsdPerM: 0.15, outUsdPerM: 0.6, maxOutputTokens: 16_384, maxInputTokens: 128_000 },
+  { prefix: 'gpt-4o', inUsdPerM: 2.5, outUsdPerM: 10, maxOutputTokens: 16_384, maxInputTokens: 128_000 },
+  { prefix: 'gpt-4.1-mini', inUsdPerM: 0.4, outUsdPerM: 1.6, maxOutputTokens: 32_768, maxInputTokens: 1_047_576 },
+  { prefix: 'gpt-4.1', inUsdPerM: 2, outUsdPerM: 8, maxOutputTokens: 32_768, maxInputTokens: 1_047_576 },
 ];
 
 /** Strip a provider org prefix ('anthropic/claude-…' → 'claude-…'). */
@@ -94,54 +106,149 @@ export interface UsageTokens {
 const USD_MICROS_PER_UNIT = 1_000_000;
 const TOKENS_PER_MILLION = 1_000_000;
 
+/** Cache rates for a row, filling the documented defaults. */
+function cacheRates(pricing: ModelPricing): { write5m: number; write1h: number; read: number } {
+  return {
+    write5m: pricing.cacheWriteUsdPerM ?? pricing.inUsdPerM * 1.25,
+    write1h: pricing.cacheWrite1hUsdPerM ?? pricing.inUsdPerM * 2,
+    read: pricing.cacheReadUsdPerM ?? pricing.inUsdPerM * 0.1,
+  };
+}
+
 /** USD micros for a token usage under a pricing entry (ceil — never undercount). */
 export function costUsdMicros(usage: UsageTokens, pricing: ModelPricing): number {
-  const cacheWrite = pricing.cacheWriteUsdPerM ?? pricing.inUsdPerM * 1.25;
-  const cacheRead = pricing.cacheReadUsdPerM ?? pricing.inUsdPerM * 0.1;
+  const rates = cacheRates(pricing);
   const usd =
     (usage.tokensIn * pricing.inUsdPerM +
       usage.tokensOut * pricing.outUsdPerM +
-      usage.cacheWriteTokens * cacheWrite +
-      usage.cacheReadTokens * cacheRead) /
+      usage.cacheWriteTokens * rates.write5m +
+      usage.cacheReadTokens * rates.read) /
     TOKENS_PER_MILLION;
   return Math.ceil(usd * USD_MICROS_PER_UNIT);
 }
 
+/** A row with every rate scaled (a request-selected surcharge, e.g. US-only inference). */
+export function scalePricing(pricing: ModelPricing, multiplier: number): ModelPricing {
+  if (multiplier === 1) {
+    return pricing;
+  }
+  const rates = cacheRates(pricing);
+  return {
+    ...pricing,
+    inUsdPerM: pricing.inUsdPerM * multiplier,
+    outUsdPerM: pricing.outUsdPerM * multiplier,
+    cacheWriteUsdPerM: rates.write5m * multiplier,
+    cacheWrite1hUsdPerM: rates.write1h * multiplier,
+    cacheReadUsdPerM: rates.read * multiplier,
+  };
+}
+
+/**
+ * Prompt tokens a provider adds that are not in the request bytes: the
+ * tool-use system prompt (≤ 804 tokens on any Claude model, per the
+ * Anthropic pricing page) and chat-format role/turn tokens.
+ */
+export const REQUEST_OVERHEAD_TOKENS = 1_024;
+
+export type RequestEstimate =
+  | {
+      ok: true;
+      /** Upper bound on billed input tokens (also the stream settle's fallback). */
+      inputTokens: number;
+      /** Upper bound on billed output tokens. */
+      outputTokens: number;
+      usdMicros: number;
+    }
+  | { ok: false; reason: string };
+
 /**
  * Tokenizer-free pre-flight estimate (Q16 allows estimation ONLY here and
- * for aborted streams). The reservation is the cap guard, so the input side
- * must be a TRUE UPPER BOUND on token count — not a heuristic. A byte-level
- * BPE tokenizer (Anthropic/OpenAI) never emits MORE tokens than the UTF-8 byte
- * length of its input: the base vocabulary is the 256 single bytes and merges
- * only REDUCE the count, so tokens ≤ bytes for ANY input, adversarial included.
- * Counting UTF-8 bytes therefore over-reserves for every script.
+ * for aborted streams). The reservation is the ONLY cap guard — settlement
+ * applies the provider's bill unguarded, by design — so this must be a TRUE
+ * UPPER BOUND on everything the provider can bill for the request:
  *
- * The old estimate (`chars/3` over the UTF-16 `.length`) held only for Latin
- * text: for CJK / many-bytes-per-token scripts it UNDER-counted by ~3×, so a
- * hijacked agent could shape `max_tokens:1` + a token-dense prompt to reserve
- * under the per-tx cap yet settle the true (2–3× larger) cost past it (S8/S1) —
- * settlement applies the real cost with no cap guard, by design. The byte bound
- * closes that. Output is already bounded by max_tokens or the model ceiling
- * (which dominates the reservation on any normal call), so this only tightens
- * the rare tiny-output + huge-input shape the attack needs; the extra headroom
- * on ordinary calls is released at settlement.
+ * - Input: the UTF-8 bytes of the WHOLE body. A byte-level BPE tokenizer
+ *   never emits more tokens than bytes (the base vocabulary is the 256 single
+ *   bytes; merges only reduce the count), so this over-counts every script
+ *   (S8/S1) — and, unlike `messages`+`system` alone, it covers `tools`,
+ *   `response_format` and every other text a provider prices as input (S-2).
+ *   Plus the provider's hidden prompt overhead, media at the per-image
+ *   ceiling, and — for media only the context window bounds — that window.
+ * - Input rate: the cache-WRITE rate when the request asks for cache writes.
+ * - Output: the requested cap (never trimmed to a table value that may be
+ *   stale) × every completion (`n`), plus prompt bytes billed at the output
+ *   rate (predicted outputs).
+ *
+ * A request this cannot bound (unsized media on a row with no context
+ * window) returns ok:false and is refused.
  */
+export function estimateRequest(args: {
+  body: Readonly<Record<string, unknown>>;
+  pricing: ModelPricing;
+  profile?: RequestProfile;
+  /** Per-image ceiling when the row names none (the adapter's provider maximum). */
+  imageTokensCeiling?: number;
+}): RequestEstimate {
+  const { body, pricing } = args;
+  const profile = args.profile ?? PLAIN_TEXT_PROFILE;
+  const imageTokens = pricing.maxImageTokens ?? args.imageTokensCeiling ?? 0;
+  let inputTokens =
+    estimateTokensFromUtf8Bytes(Buffer.byteLength(JSON.stringify(body), 'utf8')) +
+    REQUEST_OVERHEAD_TOKENS +
+    profile.fixedInputTokens +
+    profile.images * imageTokens;
+  if (profile.unsizedInput) {
+    if (pricing.maxInputTokens === undefined) {
+      return {
+        ok: false,
+        reason: `the request carries media only a context window can bound (PDFs, uploaded files), and the pricing row for '${pricing.prefix}' names none — refusing (fail-closed)`,
+      };
+    }
+    inputTokens = Math.max(inputTokens, pricing.maxInputTokens);
+  }
+  const outputTokens =
+    (requestedOutputCap(body) ?? pricing.maxOutputTokens) * profile.completions +
+    estimateTokensFromUtf8Bytes(profile.outputRateBytes);
+  const usd =
+    (inputTokens * reservationInputRate(pricing, profile.cacheWrite) +
+      outputTokens * pricing.outUsdPerM) /
+    TOKENS_PER_MILLION;
+  return { ok: true, inputTokens, outputTokens, usdMicros: Math.ceil(usd * USD_MICROS_PER_UNIT) };
+}
+
+/** The pre-flight estimate in USD micros for a request with no hidden parts. */
 export function estimateUsdMicros(args: {
-  body: Record<string, unknown>;
+  body: Readonly<Record<string, unknown>>;
   pricing: ModelPricing;
 }): number {
-  const inputText =
-    JSON.stringify(args.body.messages ?? '') + JSON.stringify(args.body.system ?? '');
-  const inputTokens = Buffer.byteLength(inputText, 'utf8');
-  const requestedMax = args.body.max_tokens ?? args.body.max_completion_tokens;
-  const outputTokens =
-    Number.isInteger(requestedMax) && (requestedMax as number) > 0
-      ? Math.min(requestedMax as number, args.pricing.maxOutputTokens)
-      : args.pricing.maxOutputTokens;
-  return costUsdMicros(
-    { tokensIn: inputTokens, tokensOut: outputTokens, cacheWriteTokens: 0, cacheReadTokens: 0 },
-    args.pricing
+  const estimate = estimateRequest(args);
+  if (!estimate.ok) {
+    throw new Error(estimate.reason);
+  }
+  return estimate.usdMicros;
+}
+
+/**
+ * The output cap the provider enforces. With both fields set, the larger
+ * (a provider honoring either can never bill past it).
+ */
+function requestedOutputCap(body: Readonly<Record<string, unknown>>): number | null {
+  const caps = [body.max_tokens, body.max_completion_tokens].filter(
+    (value): value is number => typeof value === 'number' && Number.isInteger(value) && value > 0
   );
+  return caps.length === 0 ? null : Math.max(...caps);
+}
+
+/** Input priced at the highest rate the request can trigger (cache writes cost more). */
+function reservationInputRate(pricing: ModelPricing, cacheWrite: RequestProfile['cacheWrite']): number {
+  const rates = cacheRates(pricing);
+  if (cacheWrite === '1h') {
+    return Math.max(pricing.inUsdPerM, rates.write5m, rates.write1h);
+  }
+  if (cacheWrite === '5m') {
+    return Math.max(pricing.inUsdPerM, rates.write5m);
+  }
+  return pricing.inUsdPerM;
 }
 
 /**

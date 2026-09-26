@@ -1,4 +1,5 @@
 import type { SseEvent } from '../sse.js';
+import { ANTHROPIC_IMAGE_TOKENS_MAX, profileAnthropicRequest } from './anthropic-profile.js';
 import {
   asRecord,
   emptyUsage,
@@ -106,6 +107,7 @@ export const anthropicAdapter: ProviderAdapter = {
   name: 'anthropic',
   // ANTHROPIC_BASE_URL convention excludes /v1, so the adapter carries it.
   endpointPath: '/v1/messages',
+  imageTokensCeiling: ANTHROPIC_IMAGE_TOKENS_MAX,
   headers(apiKey: string): Record<string, string> {
     return {
       'x-api-key': apiKey,
@@ -116,6 +118,7 @@ export const anthropicAdapter: ProviderAdapter = {
   prepareBody(body, stream): Record<string, unknown> {
     return { ...body, stream };
   },
+  profileRequest: profileAnthropicRequest,
   parseUsageFromJson(bodyText): ParsedUsage | null {
     const usage = asRecord(asRecord(safeJson(bodyText))?.usage);
     return usage === null ? null : usageFromRecord(usage, emptyUsage());

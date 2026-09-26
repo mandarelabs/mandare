@@ -39,13 +39,57 @@ export interface StreamUsageParser {
   observedOutputBytes(): number;
 }
 
+/**
+ * What a request can be billed for BEYOND its own bytes (S-2). The estimator
+ * bounds text by its UTF-8 bytes (tokens ≤ bytes); this profile carries the
+ * parts that bound does not cover, as found by the provider's adapter.
+ */
+export interface RequestProfile {
+  /** Image inputs, each priced at the model's (or provider's) per-image token ceiling. */
+  images: number;
+  /** Fixed hidden prompt tokens (built-in tool definitions and their system prompts). */
+  fixedInputTokens: number;
+  /** Media whose token cost only the context window bounds (PDFs, uploaded files, encrypted thinking). */
+  unsizedInput: boolean;
+  /** Completions generated per request (OpenAI `n`), each with the full output budget. */
+  completions: number;
+  /** Request bytes the provider bills at the OUTPUT rate (predicted outputs). */
+  outputRateBytes: number;
+  /** Prompt-cache writes the request asks for: input priced at the write rate. */
+  cacheWrite: 'none' | '5m' | '1h';
+  /** Rate multiplier the request selects (Anthropic `inference_geo: "us"` → 1.1). */
+  priceMultiplier: number;
+  /** Models a router may fall back to (OpenRouter `models`): priced at the most expensive. */
+  fallbackModels: readonly string[];
+}
+
+export type ProfileResult =
+  | { ok: true; profile: RequestProfile }
+  /** A billable part the door cannot bound — refused (COST_UNBOUNDED), never forwarded. */
+  | { ok: false; reason: string };
+
+export const PLAIN_TEXT_PROFILE: RequestProfile = {
+  images: 0,
+  fixedInputTokens: 0,
+  unsizedInput: false,
+  completions: 1,
+  outputRateBytes: 0,
+  cacheWrite: 'none',
+  priceMultiplier: 1,
+  fallbackModels: [],
+};
+
 export interface ProviderAdapter {
   name: ProviderName;
   /** Appended to the provider base URL, e.g. '/messages'. */
   endpointPath: string;
+  /** Per-image token ceiling when the pricing row names none (provider-documented maximum). */
+  imageTokensCeiling: number;
   headers(apiKey: string): Record<string, string>;
   /** Q16 injections (e.g. stream_options.include_usage). Returns a NEW object. */
   prepareBody(body: Readonly<Record<string, unknown>>, stream: boolean): Record<string, unknown>;
+  /** Classify what the request can be billed for beyond its bytes (S-2). */
+  profileRequest(body: Readonly<Record<string, unknown>>): ProfileResult;
   parseUsageFromJson(bodyText: string): ParsedUsage | null;
   newStreamParser(): StreamUsageParser;
 }
@@ -84,7 +128,7 @@ export function outputBytesIn(value: unknown, skipKeys: ReadonlySet<string>): nu
     if (typeof next === 'string') {
       total += Buffer.byteLength(next, 'utf8');
     } else if (Array.isArray(next)) {
-      pending.push(...next);
+      for (const item of next) pending.push(item);
     } else if (typeof next === 'object' && next !== null) {
       for (const [key, child] of Object.entries(next)) {
         if (!skipKeys.has(key)) {

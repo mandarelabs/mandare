@@ -2,11 +2,14 @@ import { describe, expect, test } from 'vitest';
 
 import {
   costUsdMicros,
+  estimateRequest,
   estimateUsdMicros,
   findPricing,
   usdMicrosToLedgerMicros,
   DEFAULT_PRICING,
+  REQUEST_OVERHEAD_TOKENS,
 } from '../src/pricing.js';
+import { PLAIN_TEXT_PROFILE } from '../src/providers/types.js';
 
 describe('findPricing', () => {
   test('longest prefix wins (gpt-5-mini is not priced as gpt-5)', () => {
@@ -70,6 +73,66 @@ describe('cost math (ceil — never undercount)', () => {
       sonnet
     );
     expect(estimate).toBeGreaterThanOrEqual(trueCost);
+  });
+
+  test('S-2: the input bound is the WHOLE body — text moved out of `messages` is still counted', () => {
+    const payload = 'Z'.repeat(50_000);
+    const inMessages = estimateRequest({
+      body: { max_tokens: 1, messages: [{ role: 'user', content: payload }] },
+      pricing: haiku,
+    });
+    const inTools = estimateRequest({
+      body: {
+        max_tokens: 1,
+        messages: [{ role: 'user', content: 'hi' }],
+        tools: [{ name: 't', description: payload, input_schema: { type: 'object' } }],
+      },
+      pricing: haiku,
+    });
+    if (!inMessages.ok || !inTools.ok) throw new Error('fixture: estimates must be bounded');
+    expect(inTools.inputTokens).toBeGreaterThanOrEqual(50_000 + REQUEST_OVERHEAD_TOKENS);
+    expect(inTools.usdMicros).toBeGreaterThanOrEqual(inMessages.usdMicros - 100);
+  });
+
+  test('S-2: n completions multiply the output bound; predicted output is priced at the output rate', () => {
+    const body = { max_tokens: 1_000, messages: [{ role: 'user', content: 'hi' }] };
+    const one = estimateRequest({ body, pricing: haiku });
+    const many = estimateRequest({ body, pricing: haiku, profile: { ...PLAIN_TEXT_PROFILE, completions: 128 } });
+    const predicted = estimateRequest({
+      body,
+      pricing: haiku,
+      profile: { ...PLAIN_TEXT_PROFILE, outputRateBytes: 10_000 },
+    });
+    if (!one.ok || !many.ok || !predicted.ok) throw new Error('fixture: estimates must be bounded');
+    expect(many.outputTokens).toBe(128_000);
+    expect(predicted.outputTokens).toBe(11_000);
+  });
+
+  test('S-2: the requested output cap is never trimmed to a (possibly stale) table ceiling', () => {
+    const estimate = estimateRequest({
+      body: { max_tokens: 100_000, messages: [{ role: 'user', content: 'hi' }] },
+      pricing: haiku, // table ceiling 64k
+    });
+    if (!estimate.ok) throw new Error('fixture: estimate must be bounded');
+    expect(estimate.outputTokens).toBe(100_000);
+  });
+
+  test('S-2: media only a context window bounds is refused on a row that names none', () => {
+    const { maxInputTokens: _window, ...noWindow } = haiku;
+    const body = { max_tokens: 10, messages: [{ role: 'user', content: 'x' }] };
+    const profile = { ...PLAIN_TEXT_PROFILE, unsizedInput: true };
+    expect(estimateRequest({ body, pricing: noWindow, profile }).ok).toBe(false);
+    const bounded = estimateRequest({ body, pricing: haiku, profile });
+    if (!bounded.ok) throw new Error('fixture: the default row names a window');
+    expect(bounded.inputTokens).toBeGreaterThanOrEqual(200_000);
+  });
+
+  test('S-2: requested cache writes price the input at the write rate (1h = 2× input)', () => {
+    const body = { max_tokens: 1, messages: [{ role: 'user', content: 'x'.repeat(10_000) }] };
+    const plain = estimateRequest({ body, pricing: haiku });
+    const oneHour = estimateRequest({ body, pricing: haiku, profile: { ...PLAIN_TEXT_PROFILE, cacheWrite: '1h' } });
+    if (!plain.ok || !oneHour.ok) throw new Error('fixture: estimates must be bounded');
+    expect(oneHour.usdMicros).toBeGreaterThanOrEqual(2 * plain.inputTokens);
   });
 
   test('currency conversion is explicit and ceils', () => {
