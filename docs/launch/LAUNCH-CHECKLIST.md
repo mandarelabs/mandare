@@ -32,7 +32,7 @@ F2–F4 do not (they close debt and unlock live smokes).
 |---|---|---|---|
 | F1 | Confirm namespace `com.mandarelabs` + `@mandarelabs/*` (DNS TXT verification against mandarelabs.com for the MCP registry; npm org exists); enable **npm Trusted Publishing** for the 8 publish packages on the `mandarelabs` org (disallow tokens, require 2FA); add repo secret `MANDARE_RELEASE_KEY_PEM` (generate: `openssl genpkey -algorithm ed25519`; publish the derived public key hex on mandare.dev/security at launch) | **Phase 2+3** | OPEN |
 | F2 | Enable **Stripe Issuing** on the TEST account (dashboard → Issuing → get started) + set webhook-timeout default to DECLINE, then run `pnpm card-live-smoke` (S5 debt) | nothing (rail is mock-proven in CI) | OPEN |
-| F3 | Run the **OpenTimestamps live-smoke** against the public calendar pool; confirm the `.ots` upgrades to a Bitcoin attestation after a few hours (S6 debt) | nothing (mock adapter proven in CI); nice before HN for honesty | OPEN |
+| F3 | Run the **OpenTimestamps live-smoke** against the public calendar pool: `pnpm ots-live-smoke` (stamps one epoch root), then the same command again 3–6 h later — PASS when the receipt carries a Bitcoin attestation (the witness upgrade pass, I-5); confirm the written `.ots` with `ots verify` (S6 debt) | nothing (mock adapter proven in CI); nice before HN for honesty | OPEN |
 | F4 | Decide the **OpenRouter `disableKey`** per-agent key-hash mapping so the cloud belt wires into `mandare kill` (S3 debt, oldest open item) | nothing (local kill authority is complete) | OPEN |
 
 ---

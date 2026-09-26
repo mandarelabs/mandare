@@ -24,6 +24,7 @@
     "docs-install-smoke": "node scripts/docs-install-smoke.mjs",
     "live-smoke": "node scripts/live-smoke.mjs",
     "card-live-smoke": "node scripts/card-live-smoke.mjs",
+    "ots-live-smoke": "node scripts/ots-live-smoke.mjs",
     "provisioning-smoke": "node scripts/provisioning-smoke.mjs",
     "sdk-py-smoke": "node scripts/sdk-py-smoke.mjs",
     "stack-smoke": "node scripts/stack-smoke.mjs"

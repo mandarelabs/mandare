@@ -2087,8 +2087,10 @@ None.
 - **`TS_REGRESSION` on pre-fix ledgers:** an honest ledger written before the
   clamp across a wall-clock step-back would now fail. None exist pre-launch.
 - **I-4 spec half** (`key_provenance` outside the preimage) — see decision 6.
-- **F3 (live OTS smoke)** is now able to pass as coded; it still needs a
-  networked founder run, and a confirmed attestation takes hours.
+- **F3 (live OTS smoke)** is now able to pass as coded and has a command:
+  `pnpm ots-live-smoke` (stamp), then again 3–6 h later (upgrade → PASS on a
+  Bitcoin attestation). Proven here only against a local mock calendar; the
+  public-calendar run is the founder's gate.
 - `docs/VERIFY-YOURSELF.md` (untracked, founder's file) still carries
   pre-fix wording for the `verify --witness` row; not edited here.
 
