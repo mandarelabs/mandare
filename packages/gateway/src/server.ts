@@ -60,6 +60,7 @@ import {
   streamSettlement,
   type SettlementPlan,
 } from './settlement.js';
+import { DeniedCoalescer } from './denied-coalescer.js';
 import { planReservation } from './reservation.js';
 import {
   anthropicMessagesBodySchema,
@@ -190,6 +191,8 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
   let halted = false;
   // Last time a kill-refusal was recorded to the ledger (throttle, see above).
   let lastRevokedDeniedAt = 0;
+  // Every other refusal is coalesced per (actor, code) past a burst (S-6).
+  const deniedCoalescer = new DeniedCoalescer();
   // Set when the card rail mounts (populated during plugin registration).
   let cardRailStatus: CardRailStatus | null = null;
 
@@ -1231,6 +1234,7 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
       estimateLedgerMicros: 0,
       code: args.code,
       reasons: [args.reason],
+      coalesce: false, // throttled above, door-wide
     });
   }
 
@@ -1380,11 +1384,16 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
           ? 'the human denied this call'
           : `no human decision within ${config.approvalTimeoutMs}ms — refusing (fail-closed)`,
       ],
+      // A human decision closes one approval flow: always on the record.
+      coalesce: false,
     });
     return { kind: 'refused', reply: refusal };
   }
 
-  /** Record a refusal as a DENIED ledger entry, then 403. */
+  /**
+   * Record a refusal as a DENIED ledger entry, then 403. Repeats of the same
+   * (actor, code) past a burst are refused without another write (S-6).
+   */
   async function recordDenied(
     reply: FastifyReply,
     args: {
@@ -1394,8 +1403,13 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
       estimateLedgerMicros: number;
       code: string;
       reasons: string[];
+      /** false = always write (the caller throttles, or it is one human decision). */
+      coalesce?: boolean;
     }
   ): Promise<unknown> {
+    if (args.coalesce !== false && !deniedCoalescer.admit(args.actor, args.code)) {
+      return reply.code(403).send({ error: 'denied by policy', code: args.code, reasons: args.reasons });
+    }
     let deniedEntry: LedgerEntryV1 | null = null;
     try {
       const appended = await ledger.appendProjected(

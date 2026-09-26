@@ -3,7 +3,8 @@ import { describe, expect, test } from 'vitest';
 import { readLedger, verifySpendProjection, LLM_CALL_DENIED } from '@mandarelabs/ledger';
 import { LLM_CALL_RESULT, type LedgerEntryV1 } from '@mandarelabs/spec';
 
-import { chatBody, openTestGateway, testMandate } from '../helpers.js';
+import { anthropicBody, chatBody, openTestGateway, testMandate } from '../helpers.js';
+import { DENIED_RECORD_BURST, DENIED_RECORD_REFILL_PER_SECOND } from '../../src/denied-coalescer.js';
 import type { FetchLike } from '../../src/providers/types.js';
 
 /**
@@ -128,4 +129,48 @@ describe('budget-race attack (N concurrent calls vs the cap)', () => {
     expect(intent.cost.amount).toBeLessThanOrEqual(PER_TX_MICROS);
     await gw.close();
   });
+});
+
+describe('refusal floods (S-6)', () => {
+  test('a refused loop is coalesced per (actor, code): bounded DENIED writes, every call still refused', async () => {
+    const tight = testMandate();
+    (tight.scopes[0] as { per_tx_max: number }).per_tx_max = 100; // every call breaches it
+    let upstreamCalls = 0;
+    const gw = await openTestGateway({
+      mandate: tight,
+      fetchImpl: () => {
+        upstreamCalls += 1;
+        return Promise.reject(new Error('never reached'));
+      },
+    });
+    const calls = 300;
+    const started = Date.now();
+    for (let i = 0; i < calls; i += 1) {
+      const response = await gw.app.inject({ method: 'POST', url: '/v1/messages', payload: anthropicBody });
+      expect(response.statusCode).toBe(403);
+      expect(response.json().code).toBe('PER_TX_EXCEEDED');
+    }
+    const elapsedSeconds = (Date.now() - started) / 1000;
+    const denied = ((await gw.ledger.readAll()).entries as LedgerEntryV1[]).filter(
+      (entry) => entry.action.type === LLM_CALL_DENIED
+    );
+    // The first refusals are always on the ledger; the flood is not.
+    expect(denied.length).toBeGreaterThan(0);
+    expect(denied.length).toBeLessThan(calls);
+    expect(denied.length).toBeLessThanOrEqual(
+      DENIED_RECORD_BURST + Math.ceil(elapsedSeconds * DENIED_RECORD_REFILL_PER_SECOND) + 1
+    );
+    expect(upstreamCalls).toBe(0);
+
+    // Another refusal code is its own bucket: recorded at once.
+    const other = await gw.app.inject({
+      method: 'POST',
+      url: '/v1/messages',
+      payload: { ...anthropicBody, model: 'claude-mystery-9' },
+    });
+    expect(other.json().code).toBe('MODEL_UNPRICED');
+    expect(other.json().denied_entry).toMatch(/^[0-9a-f]{64}$/);
+    expect(await verifySpendProjection(gw.ledger)).toMatchObject({ ok: true });
+    await gw.close();
+  }, 30_000);
 });
