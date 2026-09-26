@@ -1939,6 +1939,169 @@ None.
 
 ---
 
+## S10-fix 2B — Integrity, crypto & witnessing (2026-09-26)
+
+**Scope:** the integrity/witness findings (W-1…W-5, I-1…I-5) of the second
+pre-launch audit (2026-09). Spend (2A/2D) and surfaces/packaging/release/docs
+(K-*, R-*, D-*) are other sessions; nothing outside the verify/witness/ledger
+storage path was touched except the docs that described it. Branch
+`fix/witness-verify` off `main` (3ab3030).
+
+**Status: every W-* and I-* fixed test-first, except the spec half of I-4
+(binding `key_provenance` into the hash preimage), deferred on purpose.**
+Each acceptance test was written first and watched fail on the pre-fix code,
+then driven green. **`packages/spec` untouched — no schema bump** (W-3 changes
+stored bytes, not the hash preimage). No red-team assertion loosened (R5).
+Full local gate green: build · typecheck · lint (+ license boundaries + turbo
+boundaries) · test **725** (was 659: cli 24→42, verifier 62→76, ledger 71→82,
+witness-protocol 46→56, witness 19→27, dashboard 17→22; embedded-Postgres
+suites ran, 0 skipped) · red-team **210** (was 190: ledger 38→48, witness
+12→19, cli 0→3 — a new red-team suite) · all five demos · smoke / stack-smoke /
+skill-smoke / sdk-py-smoke / docs-install-smoke · Python unittests.
+
+### Done
+
+- **W-1 (HIGH) `verify --witness` trusted the file's source id** —
+  `apps/cli/src/witness-check.ts`: the witnessed history is looked up under
+  the source the VERIFYING key defines: sha256(`--door-key`); in directory
+  mode every key that signed the chain (every directory key for an empty
+  chain); self-anchored, sha256(`meta.door_public_key`), labeled
+  "self-declared source — pass --door-key to bind". A declared
+  `door_key_id` that disagrees is `SOURCE MISMATCH`, exit 1. `certify`
+  refuses a meta whose `door_key_id` ≠ sha256(`door_public_key`). Dashboard:
+  optional out-of-band `MANDARE_DOOR_PUBLIC_KEY`, the SELF-ANCHORED caveat
+  otherwise, a red witness badge on a mismatch. Demo 5 gained copy C (the
+  split timeline: truncate with no key, re-witness under a fresh source,
+  repoint) and now verifies with `--door-key`. Red-team:
+  `apps/cli/test/red-team/witness-split-timeline.test.ts` drives the built
+  binary (2 of 3 cases fail on the pre-fix code); acceptance
+  `apps/cli/test/verify-witness-source.test.ts` (10 cases).
+- **W-2 (MEDIUM) OpenTimestamps hexlify bomb** — `ots.ts`: op message ≤ 4096
+  bytes, result ≤ 4096 and non-empty (so hexlify input ≤ 2048), the
+  python-opentimestamps bounds; calendar responses read through a 64 KiB
+  bounded reader. `certificate.ts` parses a receipt only after the epoch is
+  witness-signed and the leaf is proven in it. N=40 bomb → typed error in
+  < 100 ms; bomb certificate → INVALID; red-team: a hostile calendar (bomb or
+  endless stream) leaves the witness up with an honest `none` receipt.
+  (Incidentally reproduced the audit's OOM: a stale build ran the bomb and
+  the worker reached 3.7 GB before it was stopped.)
+- **W-3 (MEDIUM) duplicate-key parser differential + INSERT OR REPLACE** —
+  doors store `canonicalJson(entry)` (SQLite, sync Ledger, Postgres).
+  Verifier `parseStoredEntry`/`parseStoredEntries` (pure, portable) accept a
+  row only if its text is a single-reading encoding of what it parses to
+  (canonical, or `JSON.stringify` for pre-fix rows) and its seq/entry_hash
+  columns match; otherwise the new `STORAGE_MISMATCH`. `readLedgerRows` /
+  `store.readAllRows` expose raw rows; `mandare verify` and `certify` run the
+  check before the chain. BEFORE INSERT triggers refuse any insert colliding
+  with an existing seq / entry_hash / meta key, on SQLite and Postgres. The
+  dashboard parses rows in JS through `parseStoredEntry` (never
+  `json_extract`) and flags refused rows. The threat-model trigger claim is
+  now true and says the triggers are a speed bump.
+- **W-4 (MEDIUM) rotated-out key + backdated ts** — `verifyChain` fails a
+  validly signed entry dated before its predecessor, or not a real instant,
+  with the new `TS_REGRESSION`; doors clamp the next ts to the head's (both
+  drivers read it), so a wall clock stepping back cannot make an honest chain
+  regress. `verify --witness`: the newest entry a witness-signed head covers
+  may not claim a ts after `witnessed_at` + 5 min (`TIMELINE VIOLATION`).
+  `KEY-DIRECTORY.md` states what is caught and the residual below. Red-team:
+  ROTATION + BACKDATE (old key writes behind the new key's entry with ts
+  inside its own window — the window check passes it, the timeline convicts).
+- **W-5 (LOW) open `POST /v1/anchor/run`** — `anchor-gate.ts`: bearer token
+  (`MANDARE_WITNESS_ANCHOR_TOKEN`) from anywhere, or loopback + loopback Host +
+  `x-mandare-anchor: run`; one on-demand run per minute (429 + Retry-After).
+- **I-1** — a disclosure past the witnessed head is recorder-attested "not
+  witnessed"; an unanchored certificate gets a public-anchor NOTE;
+  `certify verify` prints every residual (and includes them in `--json`).
+- **I-2** — `WITNESSING.md` / `aggregate.ts` now say certificates reveal the
+  epoch's source count and this source's rank (not who the others are).
+- **I-3** — `--key-directory http://…` refused unless `--insecure-directory`;
+  an opted-in run labels the anchor INSECURE.
+- **I-4 (verifier half)** — an undecodable signature is `SIGNATURE_INVALID`,
+  not a throw inside `verifyChain`.
+- **I-5** — witness `runUpgrade()` upgrades pending OpenTimestamps receipts
+  and stores the Bitcoin attestation; `mandare witness serve --anchor ots`
+  (and compose) runs it hourly. "Bitcoin finality" claims reworded to
+  "pending until the calendars' Bitcoin attestation lands (hours)".
+
+### Changed test assertions (R5 — nothing deleted, nothing loosened)
+
+- Both "in-place replay is impossible (PRIMARY KEY)" tests (SQLite, Postgres)
+  now remove/disable the new `ledger_entries_no_replace` trigger first, so
+  the PRIMARY KEY stays proven as an independent layer; the trigger has its
+  own tests. The PK assertions are unchanged.
+- `tamper.test.ts` cross-door fixture: the foreign entry was dated in the past
+  (before the chain); it is now dated after it, since the timeline may not
+  regress. Assertions unchanged.
+- Witness red-team `witnessVerdict` distillation looks up
+  sha256(`door_public_key`) instead of `meta.door_key_id` (tightened, mirrors
+  the CLI).
+- `server.test.ts` "anchor run with no sources" sends `x-mandare-anchor: run`;
+  assertion (409) unchanged.
+- The binary-driven CLI red-team suite has a 30 s per-test budget (two cold
+  Node starts per case); no retries.
+
+### Decisions (fix-session latitude; BUILD-DECISIONS untouched)
+
+1. **A source mismatch fails verification** (exit 1), in every mode — a
+   ledger whose declared source is not the verifying key's is not a
+   warning-level oddity, it is the W-1 attack's fingerprint.
+2. **W-3 needs no spec change.** The hash preimage is canonical JSON already;
+   what changed is the stored text and the reader check. Pre-fix rows
+   (`JSON.stringify`) are accepted because that encoding also has one
+   reading. `STORAGE_MISMATCH` lives in the Apache verifier so third-party
+   readers can run the same check.
+3. **W-4 "better" option, bounded honestly.** Non-decreasing ts + a writer
+   clamp is enforceable; "the first witnessed head covering each seq" is not —
+   the witness serves per-record history unsigned — so the witness-time bound
+   uses the latest signed head only. The remaining gap is documented, not
+   papered over.
+4. **W-5 gates one action, not the witness.** Doors on other hosts must keep
+   submitting heads; only on-demand anchor runs are an operator action.
+5. **The dashboard takes `@mandarelabs/verifier` as a runtime dependency**
+   (AGPL → Apache is allowed) so it runs the exact row check `mandare verify`
+   runs.
+6. **I-4's preimage binding waits** for a deliberate spec session (R6: plan
+   mode + schema bump), before Tier-3 attestation relies on
+   `key_provenance`.
+
+### Deviations from BUILD-DECISIONS
+
+None.
+
+### Residuals (open, owners noted)
+
+- **W-4 backdated tail:** a thief holding a rotated-out key can append to a
+  chain the successor key never wrote to (e.g. a rotated door's retired
+  ledger), with ts inside the old window; the witness accepts the growth (the
+  thief holds that key). Only `witnessed_at` > `exp` exposes it, and only the
+  latest head is signed. Closing it needs signed per-record witness history
+  (protocol change) — owner: next witness-protocol session.
+- **W-1 directory mode** checks the history of keys that signed the presented
+  chain. A multi-key chain truncated so that NO entry of the newest key
+  remains is checked only against the older keys' histories. At this tier a
+  ledger DB has one writer key (`assertDoorOwnsMeta`), so this needs a future
+  multi-key writer to matter.
+- **Self-anchored verification** still cannot catch a full re-key forgery
+  (re-signed under a new key, meta and witness source all repointed) — now
+  labeled as a self-declared source on every run.
+- **`TS_REGRESSION` on pre-fix ledgers:** an honest ledger written before the
+  clamp across a wall-clock step-back would now fail. None exist pre-launch.
+- **I-4 spec half** (`key_provenance` outside the preimage) — see decision 6.
+- **F3 (live OTS smoke)** is now able to pass as coded; it still needs a
+  networked founder run, and a confirmed attestation takes hours.
+- `docs/VERIFY-YOURSELF.md` (untracked, founder's file) still carries
+  pre-fix wording for the `verify --witness` row; not edited here.
+
+### Go/no-go after 2B
+
+Integrity side: **GO** — audit blocking items #4 (W-1) and #11 (W-2, W-3,
+W-4) are fixed with red→green tests, W-5 and I-1…I-5 too. The launch as a
+whole stays **NO-GO for Thu 2026-10-01** until 2C lands (K-1 wording, R-1,
+D-1, R-2, R-3, G-1 if the rewrite is kept), CI is green on origin at the flip
+SHA, G3/G8 are re-run there, and the founder gates (G1, G2, F1, G5) close.
+
+---
+
 ## → S9b handoff (the public flip — the first irreversible session)
 
 Everything is staged; S9b executes `docs/launch/LAUNCH-CHECKLIST.md` top to
