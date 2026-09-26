@@ -38,8 +38,8 @@ The naive design — check spend, then call — has a race: N parallel calls all
 pass the check before any of them settles. Mandare **reserves** the
 estimated cost inside the same database transaction that appends the INTENT
 entry, under the ledger's write lock; the RESULT entry settles the true cost
-and releases the reservation. Overshoot is impossible by construction, not
-statistically — there is a red-team test that fires N concurrent calls at
+and releases the reservation. Given a correct price table, overshoot is
+impossible by construction, not statistically — there is a red-team test that fires N concurrent calls at
 the cap and asserts the exact admission count, on SQLite and Postgres.
 
 Estimates are deliberately conservative (input tokens bounded by UTF-8 byte

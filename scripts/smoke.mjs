@@ -96,7 +96,9 @@ const response = await fetch(`${gatewayUrl}/v1/chat/completions`, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
   body: JSON.stringify({
-    model: 'openrouter/auto',
+    // A priced model: unpriced OpenRouter models (incl. openrouter/auto) are
+    // refused MODEL_UNPRICED since S10-fix 2D.
+    model: 'openai/gpt-4o-mini',
     messages: [{ role: 'user', content: 'Say hello.' }],
   }),
 });

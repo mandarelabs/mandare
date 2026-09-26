@@ -33,8 +33,9 @@ open source:
 - **Gateway** — your agent's existing Anthropic/OpenAI SDK just changes its
   base URL. Every call: policy check → INTENT entry (reserves the estimated
   cost inside the ledger transaction) → provider → RESULT entry (settles the
-  true cost). Overshoot is prevented by construction — a reservation race
-  can't pierce the cap, and there's a red-team test in CI that proves it.
+  true cost). Given a correct price table, overshoot is prevented by
+  construction — a reservation race can't pierce the cap, and there's a
+  red-team test in CI that proves it.
 - **Ledger** — append-only, hash-chained, door-signed, RFC 6962 tree.
   Refusals are recorded too: the system keeps its no's.
 - **Kill switch** — `mandare kill <agent>` is a local, offline operation.

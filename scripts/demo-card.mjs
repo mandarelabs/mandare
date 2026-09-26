@@ -75,11 +75,19 @@ mockLlm = createServer((req, res) => {
   req.on('data', (chunk) => (body += chunk));
   req.on('end', () => {
     res.setHeader('content-type', 'application/json');
+    // Like OpenRouter: an endpoint serves only under the door's price ceiling.
+    const ceiling = JSON.parse(body).provider?.max_price;
+    if (!(ceiling?.prompt >= 1 && ceiling?.completion >= 6250)) {
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: { code: 404, message: 'No endpoints found matching your price constraints' } }));
+      return;
+    }
     res.end(JSON.stringify({
       id: 'gen-demo', object: 'chat.completion',
       choices: [{ message: { role: 'assistant', content: 'step done' } }],
-      // 1 USD/EUR in the demo: each call settles €2.50 of the cap.
-      usage: { prompt_tokens: 40, completion_tokens: 80, cost: 2.5 },
+      // 1 USD/EUR in the demo: each call settles €2.50 of the cap
+      // (400 tokens at the $6,250/M ceiling; the prompt rounds away).
+      usage: { prompt_tokens: 40, completion_tokens: 400, cost: 2.5 },
     }));
   });
 });
@@ -109,12 +117,14 @@ await new Promise((resolve) => mockStripe.listen(0, '127.0.0.1', resolve));
 const stripeBase = `http://127.0.0.1:${mockStripe.address().port}`;
 
 // 4. The door: gateway + card rail in ONE process, ONE ledger. ----------------
-// Pricing for the demo model keeps the pre-flight RESERVATION realistic
-// (a priced estimate, not the per-tx cap); settlement is the authoritative
-// OpenRouter usage.cost either way.
+// Only a priced model runs through OpenRouter: its row sets the reservation
+// (400 output tokens at $6,250/M = $2.50, plus prompt and the 5% BYOK
+// headroom) and the provider.max_price ceiling the door forwards, so the
+// €2.50 each call settles (OpenRouter's authoritative usage.cost) is within
+// what was reserved. A row needs a context window to run through OpenRouter.
 const pricingPath = join(workDir, 'pricing.json');
 writeFileSync(pricingPath, JSON.stringify([
-  { model: 'demo/agent-model', inUsdPerM: 1, outUsdPerM: 5, maxOutputTokens: 8192 },
+  { model: 'demo/agent-model', inUsdPerM: 1, outUsdPerM: 6250, maxOutputTokens: 8192, maxInputTokens: 128000 },
 ]));
 const doorEnv = {
   ...process.env,
