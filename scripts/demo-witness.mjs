@@ -13,7 +13,10 @@
  *   2. the attacker doctors the ledger — truncation AND a re-signed
  *      rewrite — and self-anchored verification still passes;
  *   3. `mandare verify --witness` convicts both copies via RFC 6962
- *      consistency proofs against the witnessed head history;
+ *      consistency proofs against the witnessed head history — and a third
+ *      copy whose attacker re-witnessed the truncation under a FRESH source
+ *      and repointed the file at it (the split timeline, audit W-1): the
+ *      history consulted is the out-of-band door key's, never the file's;
  *   4. the witness aggregates all sources into one Merkle root and anchors
  *      it (mock adapter here; OpenTimestamps live);
  *   5. `mandare certify` emits the integrity certificate (SPEC §9.4) over
@@ -202,12 +205,48 @@ if (rewrittenVerdict.code !== 1) fail('rewritten copy must FAIL witness verifica
 if (!rewrittenVerdict.stdout.includes('FORK DETECTED')) fail('missing FORK DETECTED');
 log('[verify]  rewritten copy, --witness:      FORK DETECTED (exit 1)');
 
+// 4b. The split timeline (W-1): no key needed. Drop the tail, witness the
+//     truncated tree under a FRESH source (the witness must accept it —
+//     sources are self-authenticating), repoint the file's declared source.
+const splitDb = join(workDir, 'ledger-split.db');
+copyFileSync(honestDb, splitDb);
+const freshKey = ledgerLib.loadOrCreateDoorKey(join(workDir, 'fresh-source.pem'));
+{
+  const db = new DatabaseSync(splitDb);
+  for (const { name } of db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger'").all()) {
+    db.exec(`DROP TRIGGER "${name}";`);
+  }
+  db.prepare('DELETE FROM ledger_entries WHERE seq > 6').run();
+  const splitHashes = db.prepare('SELECT entry_hash FROM ledger_entries ORDER BY seq').all().map((r) => r.entry_hash);
+  await new protocolLib.WitnessClient({
+    url: witnessUrl,
+    signer: freshKey,
+    readEntryHashes: () => Promise.resolve(splitHashes),
+    witnessPublicKeyHex: witnessKeyHex,
+  }).sync();
+  db.prepare("INSERT OR REPLACE INTO ledger_meta (key, value) VALUES ('door_key_id', ?)").run(freshKey.keyId);
+  db.close();
+}
+log('[attacker] copy C: newest 2 DROPPED (no key needed), the truncated tree re-witnessed');
+log('           under a FRESH source, and the file\'s door_key_id repointed at it');
+const splitVerdict = runCli([
+  'verify', '--db', splitDb, '--door-key', doorKey.publicKeyHex,
+  '--witness', witnessUrl, '--witness-key', witnessKeyHex,
+]);
+if (splitVerdict.code !== 1) fail('split-timeline copy must FAIL witness verification');
+if (!splitVerdict.stdout.includes('SOURCE MISMATCH')) fail('split timeline: missing SOURCE MISMATCH');
+if (!splitVerdict.stdout.includes('TRUNCATION DETECTED')) fail('split timeline: missing TRUNCATION DETECTED');
+if (splitVerdict.stdout.includes('witness:  CONSISTENT')) fail('split timeline reported CONSISTENT');
+log('[verify]  copy C, --door-key + --witness:  SOURCE MISMATCH + TRUNCATION DETECTED (exit 1)');
+log('          the witnessed history consulted is the out-of-band door key\'s — never the file\'s');
+
 const honestVerdict = runCli([
-  'verify', '--db', honestDb, '--witness', witnessUrl, '--witness-key', witnessKeyHex,
+  'verify', '--db', honestDb, '--door-key', doorKey.publicKeyHex,
+  '--witness', witnessUrl, '--witness-key', witnessKeyHex,
 ]);
 if (honestVerdict.code !== 0) fail(`honest copy must verify, got ${honestVerdict.code}`);
 if (!honestVerdict.stdout.includes('witness:  CONSISTENT')) fail('honest copy not CONSISTENT');
-log('[verify]  honest copy, --witness:         CONSISTENT (exit 0) — no false positives');
+log('[verify]  honest copy, --door-key + --witness: CONSISTENT (exit 0) — no false positives');
 log();
 
 // 5. Public anchoring: one aggregate root for every source. ------------------
@@ -259,7 +298,8 @@ log('═════════════════════════
 log(' DEMO PASS: the ledger streamed salted 32-byte head fingerprints to');
 log(' an external witness. A truncated copy and a real-door-key rewrite');
 log(' both passed self-anchored verification — and both were CONVICTED by');
-log(' `mandare verify --witness` against the witnessed head history. The');
+log(' `mandare verify --witness` against the witnessed head history, as was');
+log(' a truncation re-witnessed under a fresh source and repointed. The');
 log(' aggregate root was publicly anchored, and `mandare certify` produced');
 log(' a selective-disclosure integrity certificate a third party verified');
 log(' without seeing anything but the two disclosed entries.');
