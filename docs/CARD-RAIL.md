@@ -104,6 +104,7 @@ and the card door is declining everything — investigate before restarting.
 | Cross-rail overshoot (LLM + card) | both rails reserve in the same counters | gateway `card-rail-mount` test, Demo 4 |
 | Killed agent/mandate/card/door | per-request read of the LOCAL revocation projection | red-team |
 | Card from another mandate / unknown card | binding check against card.create.result lineage; decline | red-team |
+| Card-creation flood (many real cards, per-card fees) | at most 5 creations per agent per rolling minute, counted from the door's own `card.create.intent` entries (rebuilt at startup — a restart does not reopen the window); refused before Stripe is called | `card-create` tests |
 | Currency confusion (JPY 100×, FX) | two-decimal allowlist + ledger-currency equality; decline | route tests |
 | Door outage / webhook timeout | operator-set dashboard default DECLINE + `webhook_timeout` monitoring | this doc (operational) |
 | Approval-threshold dodge via partials | partials restricted to budget-cap refusal codes | unit tests |

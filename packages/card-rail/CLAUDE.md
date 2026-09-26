@@ -47,7 +47,9 @@ issuing_authorization.request (signed webhook, ≤2s budget)
 ## Registry semantics
 
 `CardRegistry` is a startup-rebuilt READ MODEL of card.create.result
-entries, extended in-process on creation. Cards created elsewhere are
+entries, extended in-process on creation. `CreateVelocity` (S-8) is the
+same kind of read model over card.create.intent entries: at most
+`MAX_CARD_CREATES_PER_MINUTE` creations per agent per rolling minute. Cards created elsewhere are
 unknown → their authorizations DECLINE until the door restarts. Revocation
 is deliberately NOT cached — every authorization reads the projection, so
 `mandare kill` (separate process, same DB) bites immediately.

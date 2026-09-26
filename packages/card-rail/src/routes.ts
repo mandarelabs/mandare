@@ -35,6 +35,7 @@ import {
   parseAuthorizationEvent,
   type AuthorizationRequest,
 } from './authorization.js';
+import { CreateVelocity, MAX_CARD_CREATES_PER_MINUTE } from './create-velocity.js';
 import { CARD_CREATE_INTENT, CARD_CREATE_RESULT, CardRegistry } from './registry.js';
 import { verifyStripeSignature } from './webhook-signature.js';
 import type { CardRailDeps } from './types.js';
@@ -68,9 +69,10 @@ export async function registerCardRail(
 ): Promise<CardRailStatus> {
   const { config, ledger, policy, mandate, approvals, waivers, notifier, witnessGate } = deps;
   const clock = deps.clock ?? ((): Date => new Date());
-  const registry =
-    deps.registry ??
-    CardRegistry.fromEntries(await ledger.runProjection((tx) => tx.readAllEntries()));
+  const startupEntries = await ledger.runProjection((tx) => tx.readAllEntries());
+  const registry = deps.registry ?? CardRegistry.fromEntries(startupEntries);
+  // Creation velocity (S-8): rebuilt from the door's own create intents.
+  const createVelocity = CreateVelocity.fromEntries(startupEntries, clock().getTime());
   let halted = false;
   let lastRevokedDeniedAt = 0;
   // Authorization ids with a step-up approval currently in flight: a
@@ -803,6 +805,19 @@ export async function registerCardRail(
     if (cardScope.currency !== config.ledgerCurrency) {
       return reply.code(503).send({
         error: `mandate budgets ${cardScope.currency} but the ledger runs ${config.ledgerCurrency} — refusing (fail-closed)`,
+      });
+    }
+
+    // Velocity (S-8): a card is a real-world object with its own spending
+    // surface; an agent may start only so many per rolling minute. Checked
+    // last, so only otherwise-valid creations consume a slot.
+    if (!createVelocity.tryTake(actor, now)) {
+      return reply.code(403).send({
+        error: 'denied by policy',
+        code: 'VELOCITY_EXCEEDED',
+        reasons: [
+          `card creation is limited to ${MAX_CARD_CREATES_PER_MINUTE} per minute per agent — refusing (fail-closed)`,
+        ],
       });
     }
 

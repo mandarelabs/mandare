@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { SUBJECT_REGISTER, cardSubject, readLedger } from '@mandarelabs/ledger';
 import type { LedgerEntryV1 } from '@mandarelabs/spec';
 
+import { MAX_CARD_CREATES_PER_MINUTE } from '../src/create-velocity.js';
 import { CARD_CREATE_FAILED } from '../src/routes.js';
 import { CARD_CREATE_INTENT, CARD_CREATE_RESULT } from '../src/registry.js';
 import { StripeClient } from '../src/stripe-client.js';
@@ -168,6 +169,51 @@ describe('card rail — card creation (a mandate-checked, ledger-logged door op)
     expect(response.statusCode).toBe(502);
     const entries = readLedger(rail.dbPath).entries as LedgerEntryV1[];
     expect(entries.map((entry) => entry.action.type)).toEqual([CARD_CREATE_INTENT, CARD_CREATE_FAILED]);
+  });
+
+  it('S-8: card creation is velocity-capped per agent — the next card in the minute is refused before Stripe is called', async () => {
+    mock = await startMockStripe();
+    let nowMs = Date.parse('2026-09-26T10:00:00Z');
+    rail = await openTestRail({
+      deps: {
+        stripe: new StripeClient({ secretKey: 'sk_test_not_a_secret', baseUrl: mock.baseUrl }),
+        clock: () => new Date(nowMs),
+      },
+    });
+    for (let i = 0; i < MAX_CARD_CREATES_PER_MINUTE; i += 1) {
+      const created = await rail.app.inject({ method: 'POST', url: '/cards' });
+      expect(created.statusCode).toBe(201);
+    }
+    const refused = await rail.app.inject({ method: 'POST', url: '/cards' });
+    expect(refused.statusCode).toBe(403);
+    expect(refused.json().code).toBe('VELOCITY_EXCEEDED');
+    const stripeCreates = (): number =>
+      (mock?.requests ?? []).filter((request) => request.url === '/v1/issuing/cards').length;
+    expect(stripeCreates()).toBe(MAX_CARD_CREATES_PER_MINUTE);
+    // Metered on the ledger: one intent per started creation, none for the refusal.
+    const intents = (readLedger(rail.dbPath).entries as LedgerEntryV1[]).filter(
+      (entry) => entry.action.type === CARD_CREATE_INTENT
+    );
+    expect(intents).toHaveLength(MAX_CARD_CREATES_PER_MINUTE);
+
+    // The window rolls: a minute later the agent may create again.
+    nowMs += 61_000;
+    const later = await rail.app.inject({ method: 'POST', url: '/cards' });
+    expect(later.statusCode).toBe(201);
+    expect(stripeCreates()).toBe(MAX_CARD_CREATES_PER_MINUTE + 1);
+  });
+
+  it('S-8: the creation window is rebuilt from the ledger — a door restart does not reopen it', async () => {
+    mock = await startMockStripe();
+    rail = await openTestRail({
+      deps: { stripe: new StripeClient({ secretKey: 'sk_test_not_a_secret', baseUrl: mock.baseUrl }) },
+      // A full minute's worth of creations already on the ledger (the door restarted).
+      cards: Array.from({ length: MAX_CARD_CREATES_PER_MINUTE }, (_, i) => `ic_seeded_${i}`),
+    });
+    const refused = await rail.app.inject({ method: 'POST', url: '/cards' });
+    expect(refused.statusCode).toBe(403);
+    expect(refused.json().code).toBe('VELOCITY_EXCEEDED');
+    expect(mock.requests).toHaveLength(0);
   });
 
   it('keeps creation closed without Stripe credentials (webhook decisions unaffected)', async () => {
