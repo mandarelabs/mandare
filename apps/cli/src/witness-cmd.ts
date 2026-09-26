@@ -24,6 +24,12 @@ export interface WitnessServeOptions {
   statusListPath?: string;
 }
 
+const ON_DEMAND = "POST /v1/anchor/run — loopback with 'x-mandare-anchor: run', or MANDARE_WITNESS_ANCHOR_TOKEN";
+
+function nonEmpty(value: string | undefined): string | null {
+  return value === undefined || value === '' ? null : value;
+}
+
 /** How often pending OpenTimestamps receipts are re-checked against the calendars. */
 const UPGRADE_INTERVAL_MS = 60 * 60 * 1000;
 
@@ -36,6 +42,9 @@ export async function runWitnessServe(options: WitnessServeOptions): Promise<num
     anchor,
     keyDirectoryPath: options.keyDirectoryPath ?? null,
     statusListPath: options.statusListPath ?? null,
+    // W-5: remote on-demand anchor runs need this operator token; without it
+    // they are loopback-only (x-mandare-anchor: run) and throttled.
+    anchorRunToken: nonEmpty(process.env.MANDARE_WITNESS_ANCHOR_TOKEN),
   });
 
   const address = await witness.app.listen({ host: options.host, port: options.port });
@@ -61,9 +70,9 @@ export async function runWitnessServe(options: WitnessServeOptions): Promise<num
       },
       options.anchorIntervalHours * 60 * 60 * 1000
     );
-    console.log(`  anchoring every ${options.anchorIntervalHours}h (also on demand: POST /v1/anchor/run)`);
+    console.log(`  anchoring every ${options.anchorIntervalHours}h (also on demand: ${ON_DEMAND})`);
   } else {
-    console.log('  anchoring on demand only (POST /v1/anchor/run)');
+    console.log(`  anchoring on demand only (${ON_DEMAND})`);
   }
 
   // OpenTimestamps receipts start `pending`; calendars aggregate into Bitcoin

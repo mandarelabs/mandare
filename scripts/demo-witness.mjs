@@ -211,7 +211,9 @@ log('[verify]  honest copy, --witness:         CONSISTENT (exit 0) — no false 
 log();
 
 // 5. Public anchoring: one aggregate root for every source. ------------------
-const anchorRun = await (await fetch(`${witnessUrl}/v1/anchor/run`, { method: 'POST' })).json();
+const anchorRun = await (
+  await fetch(`${witnessUrl}/v1/anchor/run`, { method: 'POST', headers: { 'x-mandare-anchor': 'run' } })
+).json();
 if (anchorRun.epoch !== 1) fail('expected epoch 1');
 const epoch = await (await fetch(`${witnessUrl}/v1/epochs/latest`)).json();
 log(`[anchor]  epoch 1 aggregate root ${epoch.aggregate.root.slice(0, 16)}… anchored (${epoch.anchor_status}, ${epoch.anchor_kind} adapter)`);

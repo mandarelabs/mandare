@@ -24,6 +24,7 @@ import {
   type WitnessedHeadRecord,
 } from '@mandarelabs/witness-protocol';
 
+import { AnchorRunThrottle, anchorRunRefusal } from './anchor-gate.js';
 import { WitnessStore, epochSummary, type EpochRow } from './store.js';
 
 /**
@@ -50,8 +51,17 @@ export interface WitnessServerOptions {
   keyDirectoryPath?: string | null;
   /** Serve this IETF Token Status List JSON (S3 bitstring, unchanged) at /v1/status-list. */
   statusListPath?: string | null;
+  /**
+   * Operator bearer token for POST /v1/anchor/run (W-5). Absent ⇒ runs are
+   * loopback-only with the `x-mandare-anchor: run` header (see anchor-gate).
+   */
+  anchorRunToken?: string | null;
+  /** Minimum spacing between on-demand anchor runs (default 60 s). */
+  anchorRunMinIntervalMs?: number;
   logger?: boolean;
 }
+
+const DEFAULT_ANCHOR_RUN_INTERVAL_MS = 60_000;
 
 export interface WitnessServer {
   app: FastifyInstance;
@@ -257,7 +267,20 @@ export async function buildWitnessServer(options: WitnessServerOptions): Promise
     return { checked: pending.length, confirmed };
   };
 
-  app.post('/v1/anchor/run', async (_request, reply) => {
+  const anchorRunToken = options.anchorRunToken ?? null;
+  const throttle = new AnchorRunThrottle(options.anchorRunMinIntervalMs ?? DEFAULT_ANCHOR_RUN_INTERVAL_MS);
+  app.post('/v1/anchor/run', async (request, reply) => {
+    const refusal = anchorRunRefusal(request, anchorRunToken);
+    if (refusal !== null) {
+      return reply.code(refusal.status).send({ error: refusal.error });
+    }
+    const waitSeconds = throttle.take();
+    if (waitSeconds > 0) {
+      return reply
+        .code(429)
+        .header('retry-after', String(waitSeconds))
+        .send({ error: 'an anchor run just happened — retry later' });
+    }
     try {
       const result = await runAnchor();
       return reply.code(200).send(result);

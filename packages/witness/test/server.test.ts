@@ -148,7 +148,10 @@ describe('reference witness server', () => {
 
   test('anchor run with no sources refuses honestly', async () => {
     running = await startWitness();
-    const response = await fetch(`${running.url}/v1/anchor/run`, { method: 'POST' });
+    const response = await fetch(`${running.url}/v1/anchor/run`, {
+      method: 'POST',
+      headers: { 'x-mandare-anchor': 'run' }, // W-5 CSRF guard
+    });
     expect(response.status).toBe(409);
   });
 

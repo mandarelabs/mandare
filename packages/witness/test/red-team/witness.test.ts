@@ -461,3 +461,58 @@ describe('the witness vs a hostile OpenTimestamps calendar (W-2)', () => {
     ledger.close();
   }, 5000);
 });
+
+describe('POST /v1/anchor/run is not a drive-by trigger (W-5)', () => {
+  // Spamming anchor runs keeps the LATEST epoch perpetually fresh — and so
+  // every new certificate's anchor perpetually pending (OTS takes hours) —
+  // and, in ots mode, hammers the public calendars from the witness.
+  async function withSource(overrides: Parameters<typeof startWitness>[0] = {}): Promise<void> {
+    running = await startWitness(overrides);
+    const { ledger } = makeLedger(1);
+    await clientFor(ledger, running).sync();
+    ledger.close();
+  }
+  const run = (headers: Record<string, string>, remoteAddress = '127.0.0.1') =>
+    running!.witness.app.inject({ method: 'POST', url: '/v1/anchor/run', headers, remoteAddress });
+  const epochs = () => running!.witness.store.stats().epochs;
+
+  test('CSRF: a loopback POST without the x-mandare-anchor header is refused, no epoch cut', async () => {
+    await withSource();
+    const response = await run({ host: '127.0.0.1:9411', 'content-type': 'text/plain' });
+    expect(response.statusCode).toBe(403);
+    expect(epochs()).toBe(0);
+  });
+
+  test('DNS REBINDING: a loopback POST naming a foreign Host is refused', async () => {
+    await withSource();
+    const response = await run({ host: 'attacker.example:9411', 'x-mandare-anchor': 'run' });
+    expect(response.statusCode).toBe(403);
+    expect(epochs()).toBe(0);
+  });
+
+  test('REMOTE: a non-loopback caller is refused without the operator token', async () => {
+    await withSource();
+    const response = await run({ host: 'witness:9411', 'x-mandare-anchor': 'run' }, '10.0.0.5');
+    expect(response.statusCode).toBe(403);
+    expect(epochs()).toBe(0);
+  });
+
+  test('TOKEN: a wrong bearer is refused; the right one runs from anywhere', async () => {
+    await withSource({ anchorRunToken: 'op-secret-token-0123456789' });
+    expect((await run({ host: 'witness:9411', authorization: 'Bearer nope' }, '10.0.0.5')).statusCode).toBe(401);
+    expect(epochs()).toBe(0);
+    const ok = await run({ host: 'witness:9411', authorization: 'Bearer op-secret-token-0123456789' }, '10.0.0.5');
+    expect(ok.statusCode).toBe(200);
+    expect(epochs()).toBe(1);
+  });
+
+  test('THROTTLE: a second on-demand run inside the interval is 429, not a new epoch', async () => {
+    await withSource();
+    const headers = { host: '127.0.0.1:9411', 'x-mandare-anchor': 'run' };
+    expect((await run(headers)).statusCode).toBe(200);
+    const second = await run(headers);
+    expect(second.statusCode).toBe(429);
+    expect(second.headers['retry-after']).toBeDefined();
+    expect(epochs()).toBe(1);
+  });
+});
