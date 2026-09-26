@@ -18,7 +18,7 @@ import {
 } from '../src/certificate.js';
 import { WITNESS_PROTOCOL, type WitnessedHeadRecord } from '../src/messages.js';
 import { signPayload } from '../src/signing.js';
-import { buildChain, entryHashesOf, makeSigner, type TestSigner } from './helpers.js';
+import { buildChain, entryHashesOf, hexlifyBombProof, makeSigner, type TestSigner } from './helpers.js';
 
 /**
  * Full certificate lifecycle at the library level: a real chain, a witnessed
@@ -33,7 +33,7 @@ interface Fixture {
 }
 
 async function buildFixture(
-  options: { discloseSeqs?: number[]; otsBitcoinAnchor?: boolean } = {}
+  options: { discloseSeqs?: number[]; otsBitcoinAnchor?: boolean; otsProof?: Uint8Array } = {}
 ): Promise<Fixture> {
   const doorSigner = makeSigner();
   const witnessSigner = makeSigner();
@@ -68,7 +68,19 @@ async function buildFixture(
   };
   const snapshot = await buildAggregate([record, stranger]);
   const leafIndex = snapshot.records.findIndex((r) => r.source_id === record.source_id);
-  const signedEpoch = options.otsBitcoinAnchor
+  const signedEpoch = options.otsProof
+    ? await signEpochSummary(
+        {
+          epoch: 1,
+          created_at: '2026-08-09T10:05:00Z',
+          aggregate: snapshot.head,
+          anchor_status: 'pending',
+          ots_base64: bytesToBase64Url(options.otsProof),
+          anchor_kind: 'opentimestamps',
+        },
+        witnessSigner
+      )
+    : options.otsBitcoinAnchor
     ? await signEpochSummary(
         {
           epoch: 1,
@@ -243,6 +255,39 @@ describe('integrity certificate', () => {
     // and the witness-signed aggregation proof still gates and passes.
     expect(verdict.ok).toBe(true);
     expect(verdict.checks.find((c) => c.name === 'witness-aggregated-head')?.ok).toBe(true);
+  });
+
+  test('W-2: a witness-signed epoch carrying a hexlify-bomb receipt → INVALID, not a crash', async () => {
+    const { certificate, witnessSigner, doorSigner } = await buildFixture({ otsProof: hexlifyBombProof(40) });
+    const started = performance.now();
+    const verdict = await verifyIntegrityCertificate(certificate, {
+      witnessPublicKeyHex: witnessSigner.publicKeyHex,
+      doorPublicKeyHex: doorSigner.publicKeyHex,
+    });
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(verdict.ok).toBe(false);
+    const anchor = verdict.checks.find((c) => c.name === 'public-anchor');
+    expect(anchor?.basis).toBe('proof');
+    expect(anchor?.detail).toMatch(/unparseable/);
+  });
+
+  test('W-2: a receipt on an UNSIGNED epoch is never parsed (the bomb is not even opened)', async () => {
+    const { certificate, witnessSigner, doorSigner } = await buildFixture();
+    const doctored = structuredClone(certificate);
+    const epoch = doctored.anchor!.inclusion.epoch;
+    epoch.anchor_kind = 'opentimestamps';
+    epoch.ots_base64 = bytesToBase64Url(hexlifyBombProof(40)); // breaks the witness signature
+    const started = performance.now();
+    const verdict = await verifyIntegrityCertificate(doctored, {
+      witnessPublicKeyHex: witnessSigner.publicKeyHex,
+      doorPublicKeyHex: doorSigner.publicKeyHex,
+    });
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(verdict.ok).toBe(false);
+    expect(verdict.checks.find((c) => c.name === 'witness-aggregated-head')?.ok).toBe(false);
+    const anchor = verdict.checks.find((c) => c.name === 'public-anchor');
+    expect(anchor?.ok).toBe(false);
+    expect(anchor?.detail).toMatch(/not parsed/);
   });
 
   test('HIGH-2: an attacker-fabricated (unsigned) epoch aggregate is refused', async () => {

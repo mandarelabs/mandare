@@ -17,6 +17,7 @@ import {
 } from '../src/ots.js';
 import { MockAnchor, OpenTimestampsAnchor, BaseAnchor } from '../src/anchor.js';
 import { base64UrlToBytes } from '@mandarelabs/spec';
+import { hexlifyBombProof, hexlifyCalendarBody } from './helpers.js';
 
 const DIGEST = hexToBytes('11'.repeat(32));
 
@@ -171,6 +172,40 @@ describe('OTS detached proof format', () => {
     const pending = collectPending(parsed);
     expect(pending).toHaveLength(1);
     expect(bytesToHex(pending[0]!.commitment)).toBe(`0102${bytesToHex(DIGEST)}`);
+  });
+});
+
+describe('W-2: op results are length-bounded (hexlify bomb)', () => {
+  // python-opentimestamps bounds every op: message and result <= 4096 bytes,
+  // hexlify input <= 2048. Without the bound a ~100-byte receipt doubles its
+  // message per hexlify op until the verifier (or the witness) dies of OOM.
+  test('a modest hexlify chain past the 4096-byte result bound is refused (N=8 → 8 KiB)', async () => {
+    await expect(parseOtsProof(hexlifyBombProof(8))).rejects.toBeInstanceOf(OtsError);
+  });
+
+  test('the N=40 bomb returns a typed parse error in < 100 ms', async () => {
+    const started = performance.now();
+    await expect(parseOtsProof(hexlifyBombProof(40))).rejects.toThrow(/exceeds|too long/i);
+    expect(performance.now() - started).toBeLessThan(100);
+  });
+
+  test('ops inside the bound still apply (N=6: 32 B → 2 KiB)', async () => {
+    const parsed = await parseOtsProof(hexlifyBombProof(6));
+    expect(collectPending(parsed.timestamp)[0]?.commitment.length).toBe(32 * 2 ** 6);
+  });
+
+  test('append past the result bound is refused', async () => {
+    await expect(
+      applyOp({ op: 'append', operand: new Uint8Array(4096) }, new Uint8Array(32))
+    ).rejects.toBeInstanceOf(OtsError);
+  });
+
+  test('a message over the bound is refused before any op runs', async () => {
+    await expect(applyOp({ op: 'sha256' }, new Uint8Array(4097))).rejects.toBeInstanceOf(OtsError);
+  });
+
+  test('a calendar answering with the bomb is refused, not applied', async () => {
+    await expect(parseCalendarTimestamp(hexlifyCalendarBody(40), DIGEST)).rejects.toBeInstanceOf(OtsError);
   });
 });
 

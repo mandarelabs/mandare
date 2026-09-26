@@ -423,10 +423,15 @@ export async function verifyIntegrityCertificate(
     //     fails the verdict. Pending OTS, non-public adapters (mock), and no
     //     receipt are honest non-final states → 'recorder-attested',
     //     reported but not gating.
+    //     The receipt is attacker-reachable bytes: it is parsed ONLY once the
+    //     epoch is witness-signed and this source's leaf is proven in it
+    //     (W-2) — an unattested epoch never gets its receipt opened.
     let anchorOk = false;
     let anchorBasis: CertificateCheck['basis'] = 'recorder-attested';
     let anchorDetail: string;
-    if (inclusion.epoch.ots_base64 !== null && inclusion.epoch.anchor_kind === 'opentimestamps') {
+    if (!leafIncluded) {
+      anchorDetail = 'receipt not parsed — the epoch aggregation above did not verify';
+    } else if (inclusion.epoch.ots_base64 !== null && inclusion.epoch.anchor_kind === 'opentimestamps') {
       try {
         const proof = await parseOtsProof(base64UrlToBytes(inclusion.epoch.ots_base64));
         const commitsRoot = digestEquals(proof.digest, inclusion.epoch.aggregate.root);

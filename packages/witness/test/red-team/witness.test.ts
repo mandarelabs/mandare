@@ -18,6 +18,7 @@ import {
   type LedgerEntryPreimage,
 } from '@mandarelabs/spec';
 import {
+  OpenTimestampsAnchor,
   WITNESS_PROTOCOL,
   WitnessClient,
   fetchVerifiedWitnessedHead,
@@ -410,4 +411,53 @@ describe('the witness as a trust surface', () => {
     expect(computeEntryHash({ ...known, salt } as LedgerEntryPreimage)).toBe(entry_hash);
     ledger.close();
   });
+});
+
+/** A calendar POST /digest body chaining `n` hexlify ops (each doubles the message). */
+function hexlifyBombBody(n: number): Uint8Array {
+  const uri = [...new TextEncoder().encode('https://calendar.hostile')];
+  const payload = [uri.length, ...uri];
+  const pendingTag = [0x83, 0xdf, 0xe3, 0x0d, 0x2e, 0xf9, 0x0c, 0x8e];
+  return Uint8Array.from([...new Array<number>(n).fill(0xf3), 0x00, ...pendingTag, payload.length, ...payload]);
+}
+
+describe('the witness vs a hostile OpenTimestamps calendar (W-2)', () => {
+  test('HEXLIFY BOMB: a ~60-byte calendar answer cannot OOM the witness; the epoch stays honest', async () => {
+    const anchor = new OpenTimestampsAnchor({
+      calendars: ['https://calendar.hostile'],
+      fetchImpl: () => Promise.resolve(new Response(hexlifyBombBody(40))),
+    });
+    running = await startWitness({ anchor });
+    const { ledger } = makeLedger(2);
+    await clientFor(ledger, running).sync();
+
+    const started = performance.now();
+    const result = await running.witness.runAnchor();
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(result).toEqual({ epoch: 1, status: 'none' }); // commitment stands, no receipt
+    expect((await fetch(`${running.url}/healthz`)).status).toBe(200);
+    ledger.close();
+  });
+
+  test('OVERSIZE: a calendar streaming an endless body is cut off at the bound, not buffered', async () => {
+    const endless = () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            controller.enqueue(new Uint8Array(16 * 1024).fill(0xf3));
+          },
+        })
+      );
+    const anchor = new OpenTimestampsAnchor({
+      calendars: ['https://calendar.hostile'],
+      fetchImpl: () => Promise.resolve(endless()),
+    });
+    running = await startWitness({ anchor });
+    const { ledger } = makeLedger(1);
+    await clientFor(ledger, running).sync();
+
+    const result = await running.witness.runAnchor();
+    expect(result.status).toBe('none');
+    ledger.close();
+  }, 5000);
 });

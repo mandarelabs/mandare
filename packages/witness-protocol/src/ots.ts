@@ -42,6 +42,16 @@ const MAX_VARUINT = 2 ** 32;
 const MAX_VARBYTES = 4096;
 const MAX_DEPTH = 64;
 const MAX_NODES = 4096;
+/**
+ * Op bounds, python-opentimestamps' `MAX_MSG_LENGTH` / `MAX_RESULT_LENGTH`
+ * (W-2). Ops are applied while parsing, so without them a ~100-byte receipt
+ * of chained `hexlify` ops (each doubles the message) allocates until the
+ * process dies of OOM. 4096 bytes is far above any real calendar proof.
+ */
+const MAX_OP_MESSAGE = 4096;
+const MAX_OP_RESULT = 4096;
+/** A calendar response larger than this is refused unread (a real one is < 4 KiB). */
+export const MAX_CALENDAR_RESPONSE_BYTES = 64 * 1024;
 
 export class OtsError extends Error {
   constructor(message: string) {
@@ -175,6 +185,34 @@ async function digestOf(algorithm: 'SHA-256' | 'SHA-1', data: Uint8Array): Promi
 
 /** Apply one proof op to a message (WebCrypto where possible; rare ops refused). */
 export async function applyOp(op: OtsOp, msg: Uint8Array): Promise<Uint8Array> {
+  if (msg.length > MAX_OP_MESSAGE) {
+    throw new OtsError(`op message of ${msg.length} bytes exceeds the ${MAX_OP_MESSAGE}-byte bound`);
+  }
+  const resultLength = opResultLength(op, msg.length);
+  if (resultLength !== null && (resultLength > MAX_OP_RESULT || resultLength === 0)) {
+    throw new OtsError(
+      `op '${op.op}' result of ${resultLength} bytes exceeds the ${MAX_OP_RESULT}-byte bound (or is empty)`
+    );
+  }
+  return applyBoundedOp(op, msg);
+}
+
+/** Result length of the length-changing ops, known before running them; null for digests. */
+function opResultLength(op: OtsOp, msgLength: number): number | null {
+  switch (op.op) {
+    case 'append':
+    case 'prepend':
+      return msgLength + op.operand.length;
+    case 'hexlify':
+      return msgLength * 2;
+    case 'reverse':
+      return msgLength;
+    default:
+      return null;
+  }
+}
+
+async function applyBoundedOp(op: OtsOp, msg: Uint8Array): Promise<Uint8Array> {
   switch (op.op) {
     case 'sha256':
       return digestOf('SHA-256', msg);
@@ -468,8 +506,36 @@ export async function calendarSubmit(
   if (!response.ok) {
     throw new OtsError(`calendar ${calendarUrl} refused digest: ${response.status}`);
   }
-  const body = new Uint8Array(await response.arrayBuffer());
-  return parseCalendarTimestamp(body, digest);
+  return parseCalendarTimestamp(await readBoundedBody(response, calendarUrl), digest);
+}
+
+/** Read a calendar response, refusing (not buffering) anything over the size bound. */
+async function readBoundedBody(response: Response, calendarUrl: string): Promise<Uint8Array> {
+  const declared = Number(response.headers.get('content-length') ?? '0');
+  if (declared > MAX_CALENDAR_RESPONSE_BYTES) {
+    throw new OtsError(`calendar ${calendarUrl} response of ${declared} bytes exceeds the bound`);
+  }
+  if (response.body === null) return new Uint8Array(0);
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.length;
+    if (total > MAX_CALENDAR_RESPONSE_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      throw new OtsError(`calendar ${calendarUrl} response exceeds ${MAX_CALENDAR_RESPONSE_BYTES} bytes`);
+    }
+    chunks.push(value);
+  }
+  const body = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return body;
 }
 
 /**
@@ -489,6 +555,5 @@ export async function calendarUpgrade(
   if (!response.ok) {
     throw new OtsError(`calendar ${pending.uri} upgrade failed: ${response.status}`);
   }
-  const body = new Uint8Array(await response.arrayBuffer());
-  return parseCalendarTimestamp(body, pending.commitment);
+  return parseCalendarTimestamp(await readBoundedBody(response, pending.uri), pending.commitment);
 }
