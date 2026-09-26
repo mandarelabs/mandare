@@ -1662,6 +1662,127 @@ None.
 
 ---
 
+## S10-fix 2A — Spend & enforcement (2026-09-26)
+
+**Scope:** the spend/enforcement findings (S-1…S-8) of the second pre-launch
+audit (2026-09): an adversarial pass that found ways for a hijacked agent to
+spend past its mandate. Integrity/witness (W-*, I-*) and
+surfaces/packaging/release/docs (K-*, R-*, D-*) are separate fix sessions;
+nothing outside the spend path was touched except where a spend fix required
+it (the pricing-file row format in `demo-card.mjs` and the env reference).
+Branch `fix/spend-caps`.
+
+**Status: all eight S-* fixed, test-first.** Every acceptance test was
+written first and watched fail on the pre-fix code, then driven green.
+`packages/spec` untouched (R6). No red-team assertion loosened (R5) — three
+existing stream/idle assertions were TIGHTENED to "settled ≥ reservation".
+Full local gate green: build · typecheck · lint (+ license boundaries +
+turbo boundaries) · test **616** (was 570: gateway 125→169, card-rail 62→64)
+· red-team **147** (was 119: gateway 44→72) · Python 6 (was 4) · all five
+demos · smoke / stack-smoke / skill-smoke / sdk-py-smoke / docs-install-smoke.
+Demo 1 keeps its outcome (71 calls, €19.723587 settled, call #72
+PER_DAY_EXCEEDED); the per-call reservation moved €0.27786 → €0.278853 (whole
+body + hidden-prompt allowance).
+
+### Done
+
+- **S-1 (CRITICAL) stream settles at ~0** — `settlement.ts`: a stream settles
+  exactly only on the provider's final usage + end marker (Anthropic
+  `message_delta` usage + `message_stop`; OpenAI-like usage chunk + `[DONE]`).
+  Anything less — stalled, cut, hung up, usage-less — is outcome-unknown and
+  settles at max(reservation, what the partial picture proves): cache writes
+  from `message_start` carried (no longer hard-coded 0), EVERY output delta
+  type counted (thinking, tool-input JSON, `tool_calls`, refusals — by
+  exclusion of metadata keys, so new delta types count by default), missing
+  input estimated from the whole body.
+- **S-3 (HIGH) hang-ups never detected** — detected on the RESPONSE's
+  `close` before `writableFinished` (the request's `close` already fired when
+  Fastify read the body). `stream-io.ts`: every wait races the abort signal —
+  the next provider chunk, and the drain wait (which also races the client's
+  `close`); a client that never drains within streamIdleMs is disconnected;
+  the provider stream is cancelled when the door stops early.
+- **S-5 (MEDIUM) header timeout was a wall-clock kill** — the stream header
+  deadline is a timer cleared when headers arrive; a stream request answered
+  without a stream keeps a bounded body read.
+- **S-2 (HIGH) reservation not an upper bound** — `request-schemas.ts`:
+  closed per-provider allowlists (Anthropic / OpenAI / OpenRouter); Fastify's
+  `removeAdditional` turned off so an unlisted field is a 400 naming it, not
+  silently stripped. Adapter request profiles
+  (`providers/*-profile.ts`) + `reservation.ts` + `estimateRequest()`: whole-
+  body UTF-8 bytes + 1,024-token hidden-prompt allowance; images at the
+  documented per-image ceiling (Anthropic 4,784; OpenAI 48,169 unless the row
+  names less); PDFs/uploaded files/encrypted thinking at the model context
+  window; built-in client tools at a fixed overhead; `n` × the output cap;
+  predicted outputs at the output rate; `cache_control` at the write rate (1h
+  = 2×); `inference_geo: "us"` at 1.1×; OpenRouter fallback `models` at the
+  most expensive; server tools / audio / unknown content blocks refused as
+  COST_UNBOUNDED (recorded, never forwarded). The requested output cap is no
+  longer trimmed to a table ceiling.
+- **S-4 (HIGH) price table under-records** — `pricing-table.ts`: exact model
+  ids + listed dated aliases (an unlisted variant is MODEL_UNPRICED on a
+  direct provider); only `anthropic/` and `openai/` org prefixes map onto the
+  table. Every default row states its cache rates (cited from the provider
+  pages as of 2026-09-26); a row without one reads at the full input rate. 1h
+  cache writes settle at 2× from the TTL breakdown; Anthropic web-search
+  requests ($10/1,000) and OpenAI audio tokens (audio rates, high fallback)
+  reach the settled cost. Operator pricing files validated strictly (retired
+  `prefix` format, unknown keys, negative/non-finite rates refuse to load).
+  Current Claude and OpenAI chat models added.
+- **S-6 (LOW) refusal floods** — `denied-coalescer.ts`: per (actor, code) a
+  burst of 32 DENIED entries, then 8/s; kill refusals keep their door-wide
+  throttle; human approval outcomes are always recorded.
+- **S-7 (LOW) Python repr leak** — `TokenCredentials.pop_secret` is
+  `repr=False`.
+- **S-8 (LOW) unmetered card creation** — `create-velocity.ts`: at most 5
+  creations per agent per rolling minute, counted from the door's own
+  `card.create.intent` entries (rebuilt at startup, so a restart does not
+  reopen the window); refused before any ledger write or Stripe call.
+- Red-team additions: `stream-settlement` (S-1/S-3), `billing-dimensions`
+  (S-4), S-2 probes in `hostile-input`, S-6 flood in `budget-race`.
+
+### Decisions (fix-session latitude; BUILD-DECISIONS untouched)
+
+1. **No final usage ⇒ never below the reservation** (the non-stream
+   outcome-unknown rule, applied to streams). Over-recording a cut stream is
+   the safe direction for a cap; a Storno entry reconciles later.
+2. **Allowlist = refuse, not strip.** A stripped field silently turns the
+   agent's request into a different one; a 400 naming the field is the loud,
+   typed failure R4 asks for. Cost: new provider features need an allowlist +
+   pricing change before they pass the door.
+3. **Bound what bytes cannot, refuse what cannot be bounded.** Per-image
+   ceilings and the context window come from provider documentation; per-use
+   fees with injected content (server tools) and audio-rate tokens are
+   refused rather than guessed at.
+4. **S-6 is a burst limiter, not a 1-per-window throttle,** so the
+   budget-race red-team's "every refusal left an auditable entry" (R5) holds
+   while a loop is still bounded.
+5. **S-8 velocity is a ledger read model,** like the card registry, not an
+   in-memory counter that a restart resets.
+
+### Deviations from BUILD-DECISIONS
+
+None.
+
+### Known debt / residuals (open, owners noted)
+
+- **Unpriced OpenRouter models** (incl. `openrouter/auto`) still reserve the
+  per-tx cap while the reported cost settles unguarded: one such call can
+  settle past the per-tx and day caps. Sibling of S-2, pre-existing S2 design
+  (Q14). Options: price every OpenRouter model an operator allows and refuse
+  the rest; or inject `provider.max_price` derived from the per-tx cap.
+  Needs a decision — the budget-race red-team fixtures use `openrouter/auto`.
+- `redacted_thinking` blocks reserve the context window (encrypted,
+  plaintext size unknown) — safe, but heavy on 1M-context models.
+- Card rail settles the authorized amount; Stripe over-/force-captures that
+  never reach the webhook are not reconciled (audit note, not reproduced).
+- `SseParser` keeps every event of a stream in memory (`all()`); bounded by
+  stream length, minor.
+- Docs/claims follow-ups for the docs session: demo captures show the
+  4th-decimal reservation drift; "overshoot is prevented by construction"
+  needs the unpriced-OpenRouter caveat until the residual above is closed.
+
+---
+
 ## → S9b handoff (the public flip — the first irreversible session)
 
 Everything is staged; S9b executes `docs/launch/LAUNCH-CHECKLIST.md` top to
