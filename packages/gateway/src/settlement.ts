@@ -37,6 +37,11 @@ export function billedInputTokens(usage: ParsedUsage): number {
 
 /** Authoritative usage → true cost. OpenRouter's reported cost wins (Q14). */
 export function settlementMicros(usage: ParsedUsage, plan: SettlementPlan): number {
+  if (usage.costIsPartial === true) {
+    // Only part of the bill was reported (BYOK without its upstream cost):
+    // outcome-unknown, so never below the reservation (R1).
+    return Math.max(plan.estimateLedgerMicros, partialCostMicros(usage, plan));
+  }
   if (usage.costUsdMicros !== null) {
     return usdMicrosToLedgerMicros(usage.costUsdMicros, plan.usdPerLedgerUnit);
   }

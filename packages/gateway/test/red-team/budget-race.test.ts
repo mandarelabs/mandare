@@ -3,7 +3,7 @@ import { describe, expect, test } from 'vitest';
 import { readLedger, verifySpendProjection, LLM_CALL_DENIED } from '@mandarelabs/ledger';
 import { LLM_CALL_RESULT, type LedgerEntryV1 } from '@mandarelabs/spec';
 
-import { anthropicBody, chatBody, openTestGateway, testMandate } from '../helpers.js';
+import { anthropicBody, CHAT_RESERVATION_MICROS, chatBody, openTestGateway, testMandate } from '../helpers.js';
 import { DENIED_RECORD_BURST, DENIED_RECORD_REFILL_PER_SECOND } from '../../src/denied-coalescer.js';
 import type { FetchLike } from '../../src/providers/types.js';
 
@@ -20,7 +20,10 @@ import type { FetchLike } from '../../src/providers/types.js';
  */
 
 const CAP_MICROS = 20_000_000; // €20 day cap (testMandate)
-const PER_TX_MICROS = 5_000_000; // €5 → the reservation for an unpriced model
+const PER_TX_MICROS = 5_000_000; // €5 per-tx cap (testMandate)
+// What one chatBody call reserves: just under the per-tx cap, derived from the
+// real reservation code (S10-fix 2D — no longer the cap an unpriced model got).
+const RESERVATION_MICROS = CHAT_RESERVATION_MICROS;
 
 function slowUpstream(costUsd: number, delayMs: number): FetchLike {
   return async () => {
@@ -54,9 +57,10 @@ describe('budget-race attack (N concurrent calls vs the cap)', () => {
     const denied = responses.filter((response) => response.statusCode === 403).length;
     expect(completed + denied).toBe(25);
 
-    // With full overlap only floor(20/5) = 4 reservations fit; late settles
-    // can free room for a few more, but the HARD invariants are:
-    expect(completed).toBeGreaterThanOrEqual(4);
+    // With full overlap only floor(20/4.999995) = 4 reservations fit; late
+    // settles can free room for a few more, but the HARD invariants are:
+    expect(Math.floor(CAP_MICROS / RESERVATION_MICROS)).toBe(4);
+    expect(completed).toBeGreaterThanOrEqual(Math.floor(CAP_MICROS / RESERVATION_MICROS));
     expect(completed).toBeLessThanOrEqual(CAP_MICROS / 2_000_000); // settled ≤ cap
     expect(denied).toBeGreaterThan(0);
 
@@ -85,7 +89,8 @@ describe('budget-race attack (N concurrent calls vs the cap)', () => {
       fetchImpl: slowUpstream(4.9, 50),
     });
     // Three sequential calls settle €14.70, leaving €5.30 — room for exactly
-    // ONE more €5 reservation.
+    // ONE more reservation.
+    expect(Math.floor((CAP_MICROS - 3 * 4_900_000) / RESERVATION_MICROS)).toBe(1);
     for (let i = 0; i < 3; i += 1) {
       const response = await gw.app.inject({
         method: 'POST',
@@ -126,6 +131,7 @@ describe('budget-race attack (N concurrent calls vs the cap)', () => {
     expect(response.statusCode).toBe(200);
     const { entries } = readLedger(gw.dbPath);
     const intent = entries[0] as LedgerEntryV1;
+    expect(intent.cost.amount).toBe(RESERVATION_MICROS);
     expect(intent.cost.amount).toBeLessThanOrEqual(PER_TX_MICROS);
     await gw.close();
   });

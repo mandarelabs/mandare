@@ -1,4 +1,10 @@
-import { asRecord, PLAIN_TEXT_PROFILE, type ProfileResult, type ProviderName } from './types.js';
+import {
+  asRecord,
+  PLAIN_TEXT_PROFILE,
+  type ProfileResult,
+  type ProviderName,
+  type RequestProfile,
+} from './types.js';
 
 /**
  * What a Chat Completions request (OpenAI or OpenRouter) can be billed for
@@ -66,6 +72,7 @@ export function profileChatRequest(
       ...PLAIN_TEXT_PROFILE,
       images,
       unsizedInput,
+      ...(provider === 'openrouter' ? openrouterExtras(body) : {}),
       completions: typeof body.n === 'number' && Number.isInteger(body.n) && body.n > 0 ? body.n : 1,
       // Rejected predicted-output tokens are billed at the completion rate.
       outputRateBytes:
@@ -75,4 +82,51 @@ export function profileChatRequest(
         : [],
     },
   };
+}
+
+/**
+ * What OpenRouter can bill beyond the OpenAI shape (S10-fix 2D):
+ * - `cache_control` breakpoints (Anthropic models): the prompt is written to
+ *   the cache at 1.25× input, or 2× with a 1-hour TTL.
+ * - `reasoning.max_tokens`: on "most providers" the output cap covers
+ *   reasoning (OpenRouter docs) — not all, so the budget is reserved on top.
+ */
+function openrouterExtras(
+  body: Readonly<Record<string, unknown>>
+): Pick<RequestProfile, 'cacheWrite' | 'extraOutputTokens'> {
+  const reasoningBudget = asRecord(body.reasoning)?.max_tokens;
+  return {
+    cacheWrite: cacheWriteIn(body.messages),
+    extraOutputTokens:
+      typeof reasoningBudget === 'number' && Number.isInteger(reasoningBudget) && reasoningBudget > 0
+        ? reasoningBudget
+        : 0,
+  };
+}
+
+/** The costliest cache write any `cache_control` breakpoint in the value asks for. */
+function cacheWriteIn(value: unknown): RequestProfile['cacheWrite'] {
+  let found: RequestProfile['cacheWrite'] = 'none';
+  const pending: unknown[] = [value];
+  while (pending.length > 0) {
+    const next = pending.pop();
+    if (Array.isArray(next)) {
+      pending.push(...next);
+      continue;
+    }
+    const record = asRecord(next);
+    if (record === null) {
+      continue;
+    }
+    if (record.cache_control !== undefined) {
+      // Anything but the default 5-minute TTL is priced as the costlier 1h write.
+      const ttl = asRecord(record.cache_control)?.ttl;
+      if (ttl !== undefined && ttl !== '5m') {
+        return '1h';
+      }
+      found = '5m';
+    }
+    pending.push(...Object.values(record));
+  }
+  return found;
 }

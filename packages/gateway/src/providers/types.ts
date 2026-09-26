@@ -17,6 +17,12 @@ export type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 export interface ParsedUsage extends UsageTokens {
   /** Authoritative provider-reported cost in USD micros (OpenRouter only). */
   costUsdMicros: number | null;
+  /**
+   * The reported cost is only PART of the bill (a BYOK call whose upstream
+   * provider cost is missing): settlement treats the outcome as unknown and
+   * never settles below the reservation.
+   */
+  costIsPartial?: true;
 }
 
 export interface StreamUsageParser {
@@ -55,6 +61,8 @@ export interface RequestProfile {
   completions: number;
   /** Request bytes the provider bills at the OUTPUT rate (predicted outputs). */
   outputRateBytes: number;
+  /** Output tokens a request may add beyond its output cap (an OpenRouter reasoning budget). */
+  extraOutputTokens: number;
   /** Prompt-cache writes the request asks for: input priced at the write rate. */
   cacheWrite: 'none' | '5m' | '1h';
   /** Rate multiplier the request selects (Anthropic `inference_geo: "us"` → 1.1). */
@@ -74,6 +82,7 @@ export const PLAIN_TEXT_PROFILE: RequestProfile = {
   unsizedInput: false,
   completions: 1,
   outputRateBytes: 0,
+  extraOutputTokens: 0,
   cacheWrite: 'none',
   priceMultiplier: 1,
   fallbackModels: [],

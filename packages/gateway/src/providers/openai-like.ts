@@ -18,8 +18,10 @@ import {
  *   chunk before [DONE] carries `usage {prompt_tokens, completion_tokens}`.
  *   `prompt_tokens` INCLUDES cached tokens; `prompt_tokens_details.
  *   cached_tokens` splits them out for cache-read pricing.
- * - OpenRouter: additionally inject `usage.include` — its `usage.cost` (USD)
- *   is AUTHORITATIVE (Q14) and wins over any table-priced token math.
+ * - OpenRouter: additionally inject `usage.include` (deprecated, now always
+ *   on; harmless) — its reported cost (USD) is AUTHORITATIVE (Q14) and wins
+ *   over any table-priced token math; on BYOK calls that includes the
+ *   provider's own bill (see reportedCost).
  */
 
 const USD_MICROS_PER_UNIT = 1_000_000;
@@ -48,8 +50,35 @@ function usageFromRecord(usage: Record<string, unknown>): ParsedUsage {
     cacheReadTokens: cached,
     ...(audioIn === 0 ? {} : { audioInTokens: audioIn }),
     ...(audioOut === 0 ? {} : { audioOutTokens: audioOut }),
-    costUsdMicros: usdToMicros(usage.cost),
+    ...reportedCost(usage),
   };
+}
+
+/**
+ * The spend an OpenRouter usage block reports (S10-fix 2D). `cost` is what
+ * OpenRouter charged the account; on a BYOK call that is only its fee, and
+ * the provider bills the operator's own key `cost_details.
+ * upstream_inference_cost` on top (usage-accounting docs). So:
+ * - BYOK (`is_byok: true`): fee + upstream; either missing ⇒ the bill is
+ *   only partly known and never settles below the reservation.
+ * - Not BYOK (`is_byok: false`): `cost` — a non-BYOK upstream figure is what
+ *   OpenRouter paid, already inside `cost`; adding it would double-count.
+ * - `is_byok` absent: an upstream figure above `cost` can only be a BYOK
+ *   bill (the fee is 5% of it), so fee + upstream; otherwise `cost`.
+ */
+function reportedCost(usage: Record<string, unknown>): Pick<ParsedUsage, 'costUsdMicros' | 'costIsPartial'> {
+  const cost = usdToMicros(usage.cost);
+  const upstream = usdToMicros(asRecord(usage.cost_details)?.upstream_inference_cost);
+  if (usage.is_byok === true) {
+    if (cost === null || upstream === null) {
+      return { costUsdMicros: cost ?? upstream, costIsPartial: true };
+    }
+    return { costUsdMicros: cost + upstream };
+  }
+  if (usage.is_byok === undefined && cost !== null && upstream !== null && upstream > cost) {
+    return { costUsdMicros: cost + upstream };
+  }
+  return { costUsdMicros: cost };
 }
 
 /**

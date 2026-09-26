@@ -90,7 +90,8 @@ const openrouterFields: TProperties = {
   // Fallback models: the reservation prices the most expensive one.
   models: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { maxItems: 16 })),
   route: Type.Optional(unknown),
-  provider: Type.Optional(unknown),
+  // Routing preferences; the door merges its price ceiling into `max_price`.
+  provider: Type.Optional(Type.Object({}, { additionalProperties: true })),
   transforms: Type.Optional(unknown),
   reasoning: Type.Optional(unknown),
   // Overwritten by the adapter (usage accounting stays on — meter-blinding red-team).

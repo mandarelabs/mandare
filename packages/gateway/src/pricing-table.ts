@@ -2,11 +2,12 @@ import { readFileSync } from 'node:fs';
 
 /**
  * The price table: the ledger's truth whenever a provider returns no cost
- * (Anthropic, OpenAI). OpenRouter responses carry an authoritative
- * `usage.cost` and never touch it for settlement (BUILD-DECISIONS Q14/Q16).
+ * (Anthropic, OpenAI), and the reservation's bound on every provider.
+ * OpenRouter responses carry an authoritative cost that settles the call
+ * (BUILD-DECISIONS Q14/Q16) — but only a row bounds it up front.
  *
- * Fail-closed contract: a model with no row CANNOT be metered on a direct
- * provider, so the gateway refuses it (unknown price ⇒ unbounded spend ⇒ no).
+ * Fail-closed contract: a model with no row CANNOT be reserved for, so the
+ * gateway refuses it on every provider (unknown price ⇒ unbounded spend ⇒ no).
  * Ids match EXACTLY (S-4): an unlisted variant — an audio or search model, a
  * pro tier, a snapshot nobody vetted — is unpriced, never billed at a
  * sibling's rate. Operators extend the table via MANDARE_PRICING_PATH.
@@ -86,21 +87,27 @@ const CLAUDE_200K = { maxOutputTokens: 64_000, maxInputTokens: 200_000 };
  * - OpenAI — developers.openai.com/api/docs/pricing (Standard tier: input,
  *   cached input, output) and /guides/images-vision (tile math: 85 + 170 per
  *   512-px tile on gpt-4o/gpt-4.1, 70 + 140 on gpt-5, at most 8 tiles).
+ * - OpenRouter spells Claude versions with dots ('anthropic/claude-haiku-4.5'):
+ *   those ids are listed as aliases, each verified on openrouter.ai/api/v1/
+ *   models with list rates equal to the row (2026-09-26). Through OpenRouter a
+ *   row's `maxInputTokens` is also where its rates stop holding (Sonnet 4.5
+ *   bills long-context rates from 200K prompt tokens there) — requests that
+ *   may reach it are refused (openrouter-spend.ts).
  */
 export const DEFAULT_PRICING: readonly ModelPricing[] = [
-  claude('claude-fable-5-1', [], [10, 12.5, 20, 0.25, 50], CLAUDE_1M),
+  claude('claude-fable-5-1', ['claude-fable-5.1'], [10, 12.5, 20, 0.25, 50], CLAUDE_1M),
   claude('claude-fable-5', [], [10, 12.5, 20, 1, 50], CLAUDE_1M),
-  claude('claude-opus-5-5', [], [4, 5, 8, 0.2, 20], CLAUDE_1M),
+  claude('claude-opus-5-5', ['claude-opus-5.5'], [4, 5, 8, 0.2, 20], CLAUDE_1M),
   claude('claude-opus-5', [], [5, 6.25, 10, 0.5, 25], CLAUDE_1M),
-  claude('claude-opus-4-8', [], [5, 6.25, 10, 0.5, 25], CLAUDE_1M),
-  claude('claude-opus-4-7', [], [5, 6.25, 10, 0.5, 25], CLAUDE_1M),
-  claude('claude-opus-4-6', [], [5, 6.25, 10, 0.5, 25], CLAUDE_1M),
+  claude('claude-opus-4-8', ['claude-opus-4.8'], [5, 6.25, 10, 0.5, 25], CLAUDE_1M),
+  claude('claude-opus-4-7', ['claude-opus-4.7'], [5, 6.25, 10, 0.5, 25], CLAUDE_1M),
+  claude('claude-opus-4-6', ['claude-opus-4.6'], [5, 6.25, 10, 0.5, 25], CLAUDE_1M),
   claude('claude-sonnet-5', [], [2, 2.5, 4, 0.2, 10], CLAUDE_1M),
-  claude('claude-sonnet-4-6', [], [3, 3.75, 6, 0.3, 15], CLAUDE_1M),
-  claude('claude-opus-4-5', ['claude-opus-4-5-20251101'], [5, 6.25, 10, 0.5, 25], CLAUDE_200K),
-  claude('claude-sonnet-4-5', ['claude-sonnet-4-5-20250929'], [3, 3.75, 6, 0.3, 15], CLAUDE_200K),
-  claude('claude-haiku-4-5', ['claude-haiku-4-5-20251001'], [1, 1.25, 2, 0.1, 5], CLAUDE_200K),
-  claude('claude-opus-4-1', ['claude-opus-4-1-20250805'], [15, 18.75, 30, 1.5, 75], {
+  claude('claude-sonnet-4-6', ['claude-sonnet-4.6'], [3, 3.75, 6, 0.3, 15], CLAUDE_1M),
+  claude('claude-opus-4-5', ['claude-opus-4-5-20251101', 'claude-opus-4.5'], [5, 6.25, 10, 0.5, 25], CLAUDE_200K),
+  claude('claude-sonnet-4-5', ['claude-sonnet-4-5-20250929', 'claude-sonnet-4.5'], [3, 3.75, 6, 0.3, 15], CLAUDE_200K),
+  claude('claude-haiku-4-5', ['claude-haiku-4-5-20251001', 'claude-haiku-4.5'], [1, 1.25, 2, 0.1, 5], CLAUDE_200K),
+  claude('claude-opus-4-1', ['claude-opus-4-1-20250805', 'claude-opus-4.1'], [15, 18.75, 30, 1.5, 75], {
     maxOutputTokens: 32_000,
     maxInputTokens: 200_000,
   }),

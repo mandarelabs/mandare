@@ -16,6 +16,7 @@ import { loadConfigFromEnv } from '../src/config.js';
 import {
   anthropicBody,
   anthropicOkFetch,
+  CHAT_RESERVATION_MICROS,
   chatBody,
   openTestGateway,
   openrouterOkFetch,
@@ -351,11 +352,12 @@ describe('config', () => {
 
 describe('budget exhaustion (the demo mechanic)', () => {
   test('a loop of calls dies when the day cap is reached — cap never pierced, refusal on the ledger', async () => {
-    // 'openrouter/auto' is unpriced → each call reserves the FULL €5 per-tx
-    // cap, then settles the authoritative €2.40. The reservation math dies
-    // when settled + €5 would cross €20: after 7 completed calls (€16.80).
-    // Conservative by design — the cap is NEVER pierced, even though the
-    // per-call estimate is coarse.
+    // chatBody's test row reserves just under the €5 per-tx cap
+    // (CHAT_RESERVATION_MICROS), then settles the authoritative €2.40. The
+    // reservation math dies when settled + reservation would cross €20: after
+    // 7 completed calls (€16.80). Conservative by design — the cap is NEVER
+    // pierced, even though the per-call estimate is coarse.
+    expect(Math.floor((20_000_000 - CHAT_RESERVATION_MICROS) / 2_400_000) + 1).toBe(7);
     const gw = await openTestGateway({
       mandate: testMandate(),
       fetchImpl: openrouterOkFetch(2.4),

@@ -195,7 +195,7 @@ describe('witness-ack gating fail-safe (lock 5)', () => {
       fetchImpl: openrouterOkFetch(),
     });
     try {
-      // chatBody's estimate is far below the €5 approval threshold.
+      // chatBody reserves just under the €5 approval threshold (not above it).
       const response = await gw.app.inject({
         method: 'POST',
         url: '/v1/chat/completions',

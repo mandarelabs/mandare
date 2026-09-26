@@ -13,6 +13,9 @@ import { buildGateway, type GatewayDeps } from '../src/server.js';
 import type { ApprovalRequestNotification, Notifier } from '../src/approvals.js';
 import type { GatewayVault } from '../src/auth.js';
 import type { FetchLike } from '../src/providers/types.js';
+import { DEFAULT_PRICING, type ModelPricing } from '../src/pricing.js';
+import { openrouterAdapter } from '../src/providers/openai-like.js';
+import { planReservation } from '../src/reservation.js';
 
 export function tempDbPath(): string {
   return join(mkdtempSync(join(tmpdir(), 'mandare-gateway-test-')), 'ledger.db');
@@ -123,6 +126,7 @@ export async function openTestGateway(options: {
   notifier?: Notifier;
   nonceStore?: NonceStore;
   witness?: GatewayDeps['witness'];
+  pricingTable?: readonly ModelPricing[];
 } = {}): Promise<TestGateway> {
   const config = testConfig(options.config);
   const store = SqliteStore.open(config.ledgerDbPath);
@@ -148,6 +152,7 @@ export async function openTestGateway(options: {
     ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
     ...(options.timeouts === undefined ? {} : { timeouts: options.timeouts }),
     ...(options.witness === undefined ? {} : { witness: options.witness }),
+    pricingTable: options.pricingTable ?? TEST_PRICING,
   });
   return {
     app,
@@ -243,11 +248,49 @@ export function sseFetch(blocks: string[]): FetchLike {
   };
 }
 
+/**
+ * The chat fixtures' model: a test pricing row sized so one `chatBody` call
+ * reserves just under the test mandate's €5 per-tx cap (output only, so every
+ * chat fixture body reserves the same). The frozen budget suites were built
+ * on a €5 reservation back when the unpriced `openrouter/auto` reserved the
+ * per-tx cap itself; S10-fix 2D refuses unpriced OpenRouter models, so the
+ * reservation now comes from a row, and CHAT_RESERVATION_MICROS is derived
+ * from the real reservation code rather than assumed.
+ */
+export const CHAT_TEST_MODEL = 'test/per-tx-sized';
+
+export const CHAT_TEST_PRICING: ModelPricing = {
+  model: CHAT_TEST_MODEL,
+  inUsdPerM: 0,
+  // 100 output tokens × $47,619/M = $4.7619, plus the 5% BYOK fee headroom.
+  outUsdPerM: 47_619,
+  maxOutputTokens: 100,
+  maxInputTokens: 1_000_000,
+};
+
+/** The table every test gateway loads unless a test passes its own. */
+export const TEST_PRICING: readonly ModelPricing[] = [CHAT_TEST_PRICING, ...DEFAULT_PRICING];
+
 export const chatBody = {
-  model: 'openrouter/auto',
+  model: CHAT_TEST_MODEL,
   messages: [{ role: 'user', content: 'hi' }],
   max_tokens: 100,
 };
+
+/** What one `chatBody` call reserves (ledger micros at 1 USD per EUR). */
+export const CHAT_RESERVATION_MICROS: number = (() => {
+  const plan = planReservation({
+    adapter: openrouterAdapter,
+    body: chatBody,
+    model: chatBody.model,
+    pricingTable: TEST_PRICING,
+    usdPerLedgerUnit: 1,
+  });
+  if (!plan.ok) {
+    throw new Error(`chatBody does not reserve: ${plan.reason}`);
+  }
+  return plan.estimateLedgerMicros;
+})();
 
 export const anthropicBody = {
   model: 'claude-haiku-4-5',

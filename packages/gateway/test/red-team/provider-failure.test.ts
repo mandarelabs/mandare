@@ -3,7 +3,7 @@ import { describe, expect, test } from 'vitest';
 import { readLedger, verifySpendProjection } from '@mandarelabs/ledger';
 import type { LedgerEntryV1 } from '@mandarelabs/spec';
 
-import { anthropicBody, openTestGateway, openrouterOkFetch } from '../helpers.js';
+import { anthropicBody, CHAT_TEST_MODEL, openTestGateway, openrouterOkFetch } from '../helpers.js';
 import type { FetchLike } from '../../src/providers/types.js';
 
 /**
@@ -95,10 +95,13 @@ describe('provider-failure probes (fail closed, never open)', () => {
     const response = await gw.app.inject({
       method: 'POST',
       url: '/v1/chat/completions',
-      payload: { model: 'openrouter/auto', messages: [{ role: 'user', content: 'hi' }] },
+      // A priced model: an unpriced one is refused before the reservation
+      // is ever attempted (S10-fix 2D), which would skip the throw under test.
+      payload: { model: CHAT_TEST_MODEL, messages: [{ role: 'user', content: 'hi' }] },
     });
     // Reservation throw is caught as fail-closed 503; if anything ever reaches
     // the generic handler, its body must not contain the throw message.
+    expect(response.statusCode).toBe(503);
     expect(response.body).not.toContain('SECRET-sk-leak');
     await gw.close();
   });

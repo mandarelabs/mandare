@@ -653,15 +653,14 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
       }
     }
 
-    // The reservation must bound EVERYTHING the provider can bill (S-2):
-    // unpriced models on direct providers and billable parts the door cannot
+    // The reservation must bound EVERYTHING the provider can bill (S-2, 2D):
+    // unpriced models on every provider and billable parts the door cannot
     // bound are refused — recorded, never forwarded (R1).
     const reservationPlan = planReservation({
       adapter,
       body,
       model,
       pricingTable,
-      perTxMaxMicros: scopeSelection.per_tx_max,
       usdPerLedgerUnit: config.usdPerLedgerUnit,
     });
     if (!reservationPlan.ok) {
@@ -678,7 +677,8 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
     const plan: CallPlan = {
       adapter,
       endpoint,
-      body,
+      // The agent's body plus what the door adds (an OpenRouter price ceiling).
+      body: reservationPlan.forwardBody,
       model,
       stream,
       requestHash,
@@ -938,7 +938,7 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
       upstream = await fetchImpl(`${endpoint.baseUrl}${adapter.endpointPath}`, {
         method: 'POST',
         headers: adapter.headers(endpoint.apiKey),
-        body: JSON.stringify(adapter.prepareBody(body, stream)),
+        body: JSON.stringify(adapter.prepareBody(plan.body, stream)),
         signal: stream ? abort.signal : AbortSignal.timeout(timeouts.nonStreamMs),
       });
     } catch (error) {

@@ -48,7 +48,7 @@ const AUDIO_OUT_FALLBACK_USD_PER_M = 200;
  * stated rate is priced at the full input rate: the old 0.1× default
  * under-recorded gpt-4o (0.5×) and gpt-4.1 (0.25×) five- and 2.5-fold (S-4).
  */
-function cacheRates(pricing: ModelPricing): { write5m: number; write1h: number; read: number } {
+export function cacheRates(pricing: ModelPricing): { write5m: number; write1h: number; read: number } {
   return {
     write5m: pricing.cacheWriteUsdPerM ?? pricing.inUsdPerM * 1.25,
     write1h: pricing.cacheWrite1hUsdPerM ?? pricing.inUsdPerM * 2,
@@ -133,8 +133,9 @@ export type RequestEstimate =
  *   ceiling, and — for media only the context window bounds — that window.
  * - Input rate: the cache-WRITE rate when the request asks for cache writes.
  * - Output: the requested cap (never trimmed to a table value that may be
- *   stale) × every completion (`n`), plus prompt bytes billed at the output
- *   rate (predicted outputs).
+ *   stale) × every completion (`n`), plus a budget the provider may spend
+ *   outside the cap (OpenRouter reasoning), plus prompt bytes billed at the
+ *   output rate (predicted outputs).
  *
  * A request this cannot bound (unsized media on a row with no context
  * window) returns ok:false and is refused.
@@ -165,6 +166,7 @@ export function estimateRequest(args: {
   }
   const outputTokens =
     (requestedOutputCap(body) ?? pricing.maxOutputTokens) * profile.completions +
+    profile.extraOutputTokens +
     estimateTokensFromUtf8Bytes(profile.outputRateBytes);
   const usd =
     (inputTokens * reservationInputRate(pricing, profile.cacheWrite) +
