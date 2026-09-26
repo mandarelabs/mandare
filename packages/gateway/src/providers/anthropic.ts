@@ -19,18 +19,28 @@ import {
  */
 
 function usageFromRecord(usage: Record<string, unknown>, into: ParsedUsage): ParsedUsage {
+  // The TTL breakdown: the 1-hour share bills at 2× input, not 1.25× (S-4).
+  const creation = asRecord(usage.cache_creation);
+  const oneHour = creation === null ? null : nonNegativeInt(creation.ephemeral_1h_input_tokens);
+  const fiveMinute = creation === null ? 0 : nonNegativeInt(creation.ephemeral_5m_input_tokens);
+  const cacheWriteTokens =
+    'cache_creation_input_tokens' in usage
+      ? nonNegativeInt(usage.cache_creation_input_tokens)
+      : into.cacheWriteTokens;
+  // Server-side tools bill per use on top of tokens (web search: $10/1,000).
+  const webSearches = asRecord(usage.server_tool_use)?.web_search_requests;
   return {
     ...into,
     tokensIn: 'input_tokens' in usage ? nonNegativeInt(usage.input_tokens) : into.tokensIn,
     tokensOut: 'output_tokens' in usage ? nonNegativeInt(usage.output_tokens) : into.tokensOut,
-    cacheWriteTokens:
-      'cache_creation_input_tokens' in usage
-        ? nonNegativeInt(usage.cache_creation_input_tokens)
-        : into.cacheWriteTokens,
+    // A breakdown that exceeds the total wins: never under-count a write.
+    cacheWriteTokens: Math.max(cacheWriteTokens, fiveMinute + (oneHour ?? 0)),
     cacheReadTokens:
       'cache_read_input_tokens' in usage
         ? nonNegativeInt(usage.cache_read_input_tokens)
         : into.cacheReadTokens,
+    ...(oneHour === null ? {} : { cacheWrite1hTokens: oneHour }),
+    ...(webSearches === undefined ? {} : { webSearchRequests: nonNegativeInt(webSearches) }),
     costUsdMicros: null,
   };
 }

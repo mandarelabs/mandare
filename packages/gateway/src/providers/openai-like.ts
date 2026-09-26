@@ -33,13 +33,21 @@ function usdToMicros(cost: unknown): number | null {
 
 function usageFromRecord(usage: Record<string, unknown>): ParsedUsage {
   const prompt = nonNegativeInt(usage.prompt_tokens);
-  const cached = nonNegativeInt(asRecord(usage.prompt_tokens_details)?.cached_tokens);
+  const promptDetails = asRecord(usage.prompt_tokens_details);
+  const cached = nonNegativeInt(promptDetails?.cached_tokens);
+  // Audio tokens are part of prompt/completion tokens but bill at audio
+  // rates (S-4); reasoning and predicted-output tokens are already in
+  // completion_tokens at the output rate.
+  const audioIn = nonNegativeInt(promptDetails?.audio_tokens);
+  const audioOut = nonNegativeInt(asRecord(usage.completion_tokens_details)?.audio_tokens);
   return {
     ...emptyUsage(),
     // Billable fresh input = prompt minus the cache-read share.
     tokensIn: Math.max(prompt - cached, 0),
     tokensOut: nonNegativeInt(usage.completion_tokens),
     cacheReadTokens: cached,
+    ...(audioIn === 0 ? {} : { audioInTokens: audioIn }),
+    ...(audioOut === 0 ? {} : { audioOutTokens: audioOut }),
     costUsdMicros: usdToMicros(usage.cost),
   };
 }

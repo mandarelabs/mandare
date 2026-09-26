@@ -210,3 +210,13 @@ export async function reservedToday(gw: TestGateway): Promise<number> {
   });
   return snapshot.day.reservedMicros;
 }
+
+/** Listen on a real socket and read one whole streamed call. */
+export async function listenAndStream(
+  gw: TestGateway,
+  path: string,
+  body: Record<string, unknown>
+): Promise<StreamClientResult> {
+  const address = await gw.app.listen({ host: '127.0.0.1', port: 0 });
+  return streamRequest(address, path, body, 'read-all');
+}

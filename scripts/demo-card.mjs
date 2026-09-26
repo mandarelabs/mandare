@@ -114,7 +114,7 @@ const stripeBase = `http://127.0.0.1:${mockStripe.address().port}`;
 // OpenRouter usage.cost either way.
 const pricingPath = join(workDir, 'pricing.json');
 writeFileSync(pricingPath, JSON.stringify([
-  { prefix: 'agent-model', inUsdPerM: 1, outUsdPerM: 5, maxOutputTokens: 8192 },
+  { model: 'demo/agent-model', inUsdPerM: 1, outUsdPerM: 5, maxOutputTokens: 8192 },
 ]));
 const doorEnv = {
   ...process.env,
