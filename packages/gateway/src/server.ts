@@ -53,7 +53,6 @@ import { authenticatePassportRequest } from './passport-auth.js';
 import {
   estimateUsdMicros,
   findPricing,
-  costUsdMicros,
   estimateTokensFromUtf8Bytes,
   usdMicrosToLedgerMicros,
   DEFAULT_PRICING,
@@ -61,8 +60,15 @@ import {
 } from './pricing.js';
 import { anthropicAdapter } from './providers/anthropic.js';
 import { openaiAdapter, openrouterAdapter } from './providers/openai-like.js';
-import type { FetchLike, ParsedUsage, ProviderAdapter } from './providers/types.js';
+import type { FetchLike, ProviderAdapter } from './providers/types.js';
+import {
+  billedInputTokens,
+  settlementMicros,
+  streamSettlement,
+  type SettlementPlan,
+} from './settlement.js';
 import { SseParser } from './sse.js';
+import { drainedOrDone, nextChunk, timeoutReason } from './stream-io.js';
 import { WitnessGate, type WitnessAckClient } from './witness-gate.js';
 
 /** The ledger surface the gateway needs — narrow so tests can fake it. */
@@ -157,17 +163,14 @@ const anthropicMessagesBodySchema = Type.Object(
   { additionalProperties: true }
 );
 
-interface CallPlan {
+interface CallPlan extends SettlementPlan {
   adapter: ProviderAdapter;
   endpoint: ProviderEndpoint;
   body: Record<string, unknown>;
   model: string;
   stream: boolean;
   requestHash: string;
-  pricing: ModelPricing | null;
-  estimateLedgerMicros: number;
   scope: SpendScope;
-  usdPerLedgerUnit: number;
 }
 
 export function buildGateway(deps: GatewayDeps): FastifyInstance {
@@ -688,6 +691,7 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
               estimateUsdMicros({ body, pricing }),
               config.usdPerLedgerUnit
             ),
+      inputTokensBound: estimateTokensFromUtf8Bytes(Buffer.byteLength(JSON.stringify(body), 'utf8')),
       scope: scopeSelection,
       usdPerLedgerUnit: config.usdPerLedgerUnit,
     };
@@ -928,18 +932,21 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
     // Execute.
     let upstream: Response;
     const abort = new AbortController();
+    // Streams get a header-phase deadline so a provider that accepts the
+    // socket but never responds cannot pin the request (and its reservation)
+    // forever — and the deadline ENDS when the headers arrive; the per-chunk
+    // idle timer takes over from there (S-5). A timeout that outlived the
+    // headers was a hard wall-clock kill on every stream longer than
+    // streamIdleMs, cutting healthy long generations mid-flight.
+    const headerDeadline = stream
+      ? setTimeout(() => abort.abort(timeoutReason('no response headers')), timeouts.streamIdleMs)
+      : null;
     try {
       upstream = await fetchImpl(`${endpoint.baseUrl}${adapter.endpointPath}`, {
         method: 'POST',
         headers: adapter.headers(endpoint.apiKey),
         body: JSON.stringify(adapter.prepareBody(body, stream)),
-        // Streaming: the caller's abort plus a header-phase timeout, so a
-        // provider that accepts the socket but never responds cannot pin the
-        // request (and its reservation) forever. The per-chunk idle timeout
-        // takes over once the stream body starts.
-        signal: stream
-          ? AbortSignal.any([abort.signal, AbortSignal.timeout(timeouts.streamIdleMs)])
-          : AbortSignal.timeout(timeouts.nonStreamMs),
+        signal: stream ? abort.signal : AbortSignal.timeout(timeouts.nonStreamMs),
       });
     } catch (error) {
       // The fetch failed — but that does NOT prove nothing executed: a
@@ -960,13 +967,30 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
       return reply.code(502).send({
         error: `provider unreachable (${errorName}); outcome unknown — settled at the reserved estimate pending reconciliation`,
       });
+    } finally {
+      if (headerDeadline !== null) {
+        clearTimeout(headerDeadline);
+      }
     }
 
     const contentType = upstream.headers.get('content-type') ?? 'application/json';
     if (stream && upstream.status === 200 && contentType.includes('text/event-stream')) {
-      return streamThrough(plan, intent, upstream, request, reply, abort);
+      return streamThrough(plan, intent, upstream, reply, abort);
     }
-    return respondBuffered(plan, intent, upstream, reply);
+    if (!stream) {
+      return respondBuffered(plan, intent, upstream, reply);
+    }
+    // A stream request answered WITHOUT a stream (an error body, a refusal):
+    // its body read is bounded like the header phase was.
+    const bodyDeadline = setTimeout(
+      () => abort.abort(timeoutReason('response body not read in time')),
+      timeouts.streamIdleMs
+    );
+    try {
+      return await respondBuffered(plan, intent, upstream, reply);
+    } finally {
+      clearTimeout(bodyDeadline);
+    }
   }
 
   /** Non-streaming (and streaming-refused/error) responses: buffer, settle, relay. */
@@ -1010,7 +1034,7 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
     const settled = await settleOrHalt(intent, plan.requestHash, {
       responseHash: sha256Hex(bodyText),
       costMicros,
-      tokensIn: usage === null ? 0 : usage.tokensIn + usage.cacheWriteTokens + usage.cacheReadTokens,
+      tokensIn: usage === null ? 0 : billedInputTokens(usage),
       tokensOut: usage?.tokensOut ?? 0,
     });
     if (settled === null) {
@@ -1024,106 +1048,100 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
       .send(bodyText);
   }
 
-  /** Streaming: bytes pass through untouched while a tee parses usage (Q16). */
+  /**
+   * Streaming: bytes pass through untouched while a tee parses usage (Q16).
+   *
+   * Every way a stream can end early is settled (R3) and none of them can
+   * hang the handler (S-3):
+   * - the provider goes quiet for streamIdleMs → abort;
+   * - the CLIENT hangs up → seen on the RESPONSE's 'close' before it finished
+   *   (the request's own 'close' already fired when Fastify read the body, so
+   *   a listener there never runs) → abort;
+   * - the client stops reading → the drain wait races the hang-up and the
+   *   idle deadline, and a client that never drains is disconnected.
+   */
   async function streamThrough(
     plan: CallPlan,
     intent: LedgerEntryV1,
     upstream: Response,
-    request: FastifyRequest,
     reply: FastifyReply,
     abort: AbortController
   ): Promise<unknown> {
     reply.hijack();
     const raw = reply.raw;
-    raw.writeHead(200, {
-      'content-type': upstream.headers.get('content-type') ?? 'text/event-stream',
-      'cache-control': 'no-cache',
-      'x-mandare-intent-entry': intent.entry_hash,
+    let clientGone = raw.destroyed;
+    raw.on('close', () => {
+      if (!raw.writableFinished) {
+        clientGone = true;
+        abort.abort();
+      }
     });
+    if (clientGone) {
+      abort.abort();
+    } else {
+      raw.writeHead(200, {
+        'content-type': upstream.headers.get('content-type') ?? 'text/event-stream',
+        'cache-control': 'no-cache',
+        'x-mandare-intent-entry': intent.entry_hash,
+      });
+    }
 
     const sse = new SseParser();
     const usageParser = plan.adapter.newStreamParser();
     const responseHasher = createHash('sha256');
     const decoder = new TextDecoder();
-    let clientGone = false;
-    let aborted = false;
-    request.raw.on('close', () => {
-      clientGone = true;
-      abort.abort();
-    });
+    let clientStalled = false;
 
     let idleTimer: NodeJS.Timeout | null = null;
     const resetIdle = (): void => {
       if (idleTimer !== null) {
         clearTimeout(idleTimer);
       }
-      idleTimer = setTimeout(() => abort.abort(), timeouts.streamIdleMs);
+      idleTimer = setTimeout(() => abort.abort(timeoutReason('stream idle')), timeouts.streamIdleMs);
     };
 
+    const reader = upstream.body?.getReader() ?? null;
     try {
       resetIdle();
-      if (upstream.body === null) {
+      if (reader === null) {
         throw new Error('provider returned no stream body');
       }
-      for await (const chunk of upstream.body as AsyncIterable<Uint8Array>) {
+      for (;;) {
+        const next = await nextChunk(reader, abort.signal);
+        if (next === 'aborted' || next.done) {
+          break;
+        }
         resetIdle();
-        responseHasher.update(chunk);
-        for (const event of sse.push(decoder.decode(chunk, { stream: true }))) {
+        responseHasher.update(next.value);
+        for (const event of sse.push(decoder.decode(next.value, { stream: true }))) {
           usageParser.onEvent(event);
         }
-        if (!clientGone && !raw.write(chunk)) {
-          await new Promise<void>((resolve) => raw.once('drain', resolve));
+        if (!clientGone && !raw.write(next.value)) {
+          await drainedOrDone(raw, abort.signal);
+          // The deadline passed while the client refused to read.
+          clientStalled = abort.signal.aborted && !clientGone;
         }
       }
     } catch {
-      aborted = true;
+      // The provider stream died: settled below as outcome-unknown (S-1).
     } finally {
       if (idleTimer !== null) {
         clearTimeout(idleTimer);
       }
+      // Stopping early must release the provider connection too.
+      void reader?.cancel().catch(() => undefined);
     }
 
-    // SETTLE. Complete stream: provider usage (or estimate if the stream
-    // carried none). Aborted stream: tokenizer estimate over what was
-    // actually observed (Q16), floored at the input share of the estimate.
-    const usage = usageParser.usage();
-    let costMicros: number;
-    let tokensIn = 0;
-    let tokensOut = 0;
-    if (usage !== null && !aborted) {
-      costMicros = settlementMicros(usage, plan);
-      tokensIn = usage.tokensIn + usage.cacheWriteTokens + usage.cacheReadTokens;
-      tokensOut = usage.tokensOut;
-    } else if (plan.pricing !== null) {
-      tokensIn =
-        usage?.tokensIn ??
-        estimateTokensFromUtf8Bytes(Buffer.byteLength(JSON.stringify(plan.body.messages ?? ''), 'utf8'));
-      // An aborted stream's usage (if any) predates the final delta — its
-      // output count is stale, so the observed text is the better floor.
-      tokensOut = Math.max(
-        usage?.tokensOut ?? 0,
-        estimateTokensFromUtf8Bytes(usageParser.observedTextBytes())
-      );
-      costMicros = usdMicrosToLedgerMicros(
-        costUsdMicros(
-          { tokensIn, tokensOut, cacheWriteTokens: 0, cacheReadTokens: 0 },
-          plan.pricing
-        ),
-        plan.usdPerLedgerUnit
-      );
-    } else {
-      // Unpriced OpenRouter stream that died before its usage chunk:
-      // conservative — the reservation (per-tx cap) stands as settled.
-      costMicros = plan.estimateLedgerMicros;
-    }
-
+    // SETTLE (S-1): exact from the provider's final usage; without it the
+    // outcome is unknown — never below the reservation.
     const settled = await settleOrHalt(intent, plan.requestHash, {
       responseHash: responseHasher.digest('hex'),
-      costMicros,
-      tokensIn,
-      tokensOut,
+      ...streamSettlement(usageParser, plan),
     });
-    if (!clientGone) {
+    if (clientStalled) {
+      // A client that will not read cannot be written to: free its socket.
+      raw.destroy();
+    } else if (!clientGone && !raw.destroyed) {
       if (settled !== null) {
         // SSE comment line — protocol-legal, ignored by clients, and it puts
         // the result entry hash in the captured stream for auditability.
@@ -1132,17 +1150,6 @@ export function buildGateway(deps: GatewayDeps): FastifyInstance {
       raw.end();
     }
     return reply;
-  }
-
-  function settlementMicros(usage: ParsedUsage, plan: CallPlan): number {
-    if (usage.costUsdMicros !== null) {
-      // OpenRouter's reported cost is authoritative (Q14).
-      return usdMicrosToLedgerMicros(usage.costUsdMicros, plan.usdPerLedgerUnit);
-    }
-    if (plan.pricing !== null) {
-      return usdMicrosToLedgerMicros(costUsdMicros(usage, plan.pricing), plan.usdPerLedgerUnit);
-    }
-    return plan.estimateLedgerMicros;
   }
 
   /** One revocation record, or 'unavailable' when the projection cannot be read. */

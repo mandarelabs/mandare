@@ -4,6 +4,7 @@ import { readLedger } from '@mandarelabs/ledger';
 import type { LedgerEntryV1 } from '@mandarelabs/spec';
 
 import { anthropicBody, chatBody, openTestGateway, sseFetch } from './helpers.js';
+import { anthropicEvent, pacedSseFetch, streamRequest } from './stream-helpers.js';
 import type { FetchLike } from '../src/providers/types.js';
 
 /**
@@ -143,7 +144,60 @@ describe('streaming pass-through + usage tee', () => {
     expect(settled.cost.tokens_in).toBe(600);
     expect(settled.cost.tokens_out).toBe(19);
     expect(settled.cost.amount).toBeGreaterThan(0);
+    // No final usage ⇒ never below the reservation (S-1).
+    expect(settled.cost.amount).toBeGreaterThanOrEqual((entries[0] as LedgerEntryV1).cost.amount);
     expect(settled.outcome_ref).toBe((entries[0] as LedgerEntryV1).entry_hash);
+  });
+
+  test('S-5: an actively streaming response longer than streamIdleMs completes — the header deadline ends when headers arrive', async () => {
+    // One event every 60 ms for ~0.8 s against a 300 ms idle window: never
+    // idle, so it must NOT be cut (the old header timeout was never cleared
+    // and killed every stream at streamIdleMs of wall-clock time).
+    const upstream = pacedSseFetch(
+      [
+        anthropicEvent('message_start', { message: { usage: { input_tokens: 1000, output_tokens: 1 } } }),
+        ...Array.from({ length: 12 }, (_, i) =>
+          anthropicEvent('content_block_delta', { index: 0, delta: { type: 'text_delta', text: `part ${i} ` } })
+        ),
+        anthropicEvent('message_delta', { usage: { output_tokens: 95 } }),
+        anthropicEvent('message_stop', {}),
+      ],
+      { intervalMs: 60 }
+    );
+    const gw = await openTestGateway({
+      fetchImpl: upstream,
+      timeouts: { nonStreamMs: 5_000, streamIdleMs: 300 },
+    });
+    const address = await gw.app.listen({ host: '127.0.0.1', port: 0 });
+    const client = await streamRequest(address, '/v1/messages', anthropicBody, 'read-all');
+    await gw.close();
+
+    expect(client.text).toContain('message_stop');
+    expect(client.text).toContain(': x-mandare-result-entry ');
+    expect(upstream.aborted()).toBe(false);
+    const { entries } = readLedger(gw.dbPath);
+    const settled = entries[1] as LedgerEntryV1;
+    // Settled from the AUTHORITATIVE final usage: 1000×$1/M + 95×$5/M.
+    expect(settled.cost.amount).toBe(1475);
+    expect(settled.cost.tokens_out).toBe(95);
+  });
+
+  test('S-5: a provider that accepts a stream request but never sends headers still times out and settles at the reservation', async () => {
+    const neverAnswers: FetchLike = (_url, init) =>
+      new Promise((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () => reject(new DOMException('timed out', 'TimeoutError')));
+      });
+    const gw = await openTestGateway({
+      fetchImpl: neverAnswers,
+      timeouts: { nonStreamMs: 5_000, streamIdleMs: 200 },
+    });
+    const result = await listenAndCall(gw, '/v1/messages', anthropicBody);
+    await gw.close();
+    expect(result.status).toBe(502);
+    const { entries } = readLedger(gw.dbPath);
+    expect(entries).toHaveLength(2);
+    const [intent, settled] = entries as [LedgerEntryV1, LedgerEntryV1];
+    expect(settled.cost.amount).toBe(intent.cost.amount);
   });
 
   test('provider refusing the stream (non-200) is settled 0 and passed through buffered', async () => {

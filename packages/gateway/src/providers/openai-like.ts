@@ -3,6 +3,7 @@ import {
   asRecord,
   emptyUsage,
   nonNegativeInt,
+  outputBytesIn,
   type ParsedUsage,
   type ProviderAdapter,
   type ProviderName,
@@ -42,12 +43,21 @@ function usageFromRecord(usage: Record<string, unknown>): ParsedUsage {
   };
 }
 
+/**
+ * Delta keys that are protocol metadata, not generated output. Content,
+ * refusals, reasoning text and tool-call names/arguments all count (S-1:
+ * counting only `content` let a stream of `tool_calls` settle for free).
+ */
+const NON_OUTPUT_DELTA_KEYS: ReadonlySet<string> = new Set(['role', 'type', 'id', 'index']);
+
 class OpenAiLikeStreamParser implements StreamUsageParser {
   private parsed: ParsedUsage | null = null;
-  private textBytes = 0;
+  private outputBytes = 0;
+  private sawDone = false;
 
   onEvent(event: SseEvent): void {
     if (event.data === '[DONE]') {
+      this.sawDone = true;
       return;
     }
     const data = asRecord(safeJson(event.data));
@@ -60,12 +70,9 @@ class OpenAiLikeStreamParser implements StreamUsageParser {
     }
     const choices = Array.isArray(data.choices) ? data.choices : [];
     for (const choice of choices) {
-      const content = asRecord(asRecord(choice)?.delta)?.content;
-      if (typeof content === 'string') {
-        // UTF-8 bytes (token upper bound) so a token-dense aborted stream
-        // cannot under-record output cost at settlement (S8/S1).
-        this.textBytes += Buffer.byteLength(content, 'utf8');
-      }
+      // UTF-8 bytes (token upper bound) so a token-dense aborted stream
+      // cannot under-record output cost at settlement (S8/S1).
+      this.outputBytes += outputBytesIn(asRecord(choice)?.delta, NON_OUTPUT_DELTA_KEYS);
     }
   }
 
@@ -73,8 +80,12 @@ class OpenAiLikeStreamParser implements StreamUsageParser {
     return this.parsed;
   }
 
-  observedTextBytes(): number {
-    return this.textBytes;
+  hasFinalUsage(): boolean {
+    return this.parsed !== null && this.sawDone;
+  }
+
+  observedOutputBytes(): number {
+    return this.outputBytes;
   }
 }
 

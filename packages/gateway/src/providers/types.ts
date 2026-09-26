@@ -23,8 +23,20 @@ export interface StreamUsageParser {
   onEvent(event: SseEvent): void;
   /** Best usage picture so far; null if none seen yet. */
   usage(): ParsedUsage | null;
-  /** Assistant text UTF-8 bytes observed — aborted-stream estimation (Q16). */
-  observedTextBytes(): number;
+  /**
+   * True once the provider's AUTHORITATIVE end-of-stream usage has arrived
+   * together with its end-of-stream marker (Anthropic: a usage-carrying
+   * `message_delta` and `message_stop`; OpenAI-like: the usage chunk and
+   * `[DONE]`). Anything less is a partial picture, and a partial picture is
+   * never allowed to settle a call below its reservation (S-1).
+   */
+  hasFinalUsage(): boolean;
+  /**
+   * UTF-8 bytes of generated output observed across EVERY delta type (text,
+   * thinking, tool-call JSON, refusals) — the token upper bound used when a
+   * stream ends without its final usage (Q16, S-1).
+   */
+  observedOutputBytes(): number;
 }
 
 export interface ProviderAdapter {
@@ -56,4 +68,30 @@ export function asRecord(value: unknown): Record<string, unknown> | null {
 
 export function nonNegativeInt(value: unknown): number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : 0;
+}
+
+/**
+ * UTF-8 byte total of every string inside a stream delta, skipping keys that
+ * carry protocol metadata rather than generated output. Counting by exclusion
+ * keeps the bound conservative for delta shapes this code has never seen: a
+ * new output channel is counted by default instead of silently dropped.
+ */
+export function outputBytesIn(value: unknown, skipKeys: ReadonlySet<string>): number {
+  let total = 0;
+  const pending: unknown[] = [value];
+  while (pending.length > 0) {
+    const next = pending.pop();
+    if (typeof next === 'string') {
+      total += Buffer.byteLength(next, 'utf8');
+    } else if (Array.isArray(next)) {
+      pending.push(...next);
+    } else if (typeof next === 'object' && next !== null) {
+      for (const [key, child] of Object.entries(next)) {
+        if (!skipKeys.has(key)) {
+          pending.push(child);
+        }
+      }
+    }
+  }
+  return total;
 }

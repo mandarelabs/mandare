@@ -3,6 +3,7 @@ import {
   asRecord,
   emptyUsage,
   nonNegativeInt,
+  outputBytesIn,
   type ParsedUsage,
   type ProviderAdapter,
   type StreamUsageParser,
@@ -33,9 +34,19 @@ function usageFromRecord(usage: Record<string, unknown>, into: ParsedUsage): Par
   };
 }
 
+/**
+ * Delta keys that are protocol metadata, not generated output. Everything else
+ * in a `content_block_delta` counts: text, thinking, tool-input JSON — and any
+ * delta type added later (S-1: counting only `text` let thinking and tool
+ * calls stream for free).
+ */
+const NON_OUTPUT_DELTA_KEYS: ReadonlySet<string> = new Set(['type', 'signature']);
+
 class AnthropicStreamParser implements StreamUsageParser {
   private merged: ParsedUsage | null = null;
-  private textBytes = 0;
+  private outputBytes = 0;
+  private sawDeltaUsage = false;
+  private sawStop = false;
 
   onEvent(event: SseEvent): void {
     const data = asRecord(safeJson(event.data));
@@ -54,17 +65,19 @@ class AnthropicStreamParser implements StreamUsageParser {
       if (usage !== null) {
         // Cumulative — each delta overwrites, the final one wins (Q16).
         this.merged = usageFromRecord(usage, this.merged ?? emptyUsage());
+        this.sawDeltaUsage = true;
       }
       return;
     }
+    if (data.type === 'message_stop') {
+      this.sawStop = true;
+      return;
+    }
     if (data.type === 'content_block_delta') {
-      const delta = asRecord(data.delta);
-      if (typeof delta?.text === 'string') {
-        // UTF-8 bytes, not UTF-16 length: the settle-side fallback treats this
-        // as a token UPPER bound (tokens ≤ bytes), so a token-dense (CJK)
-        // aborted stream cannot under-record output cost (S8/S1).
-        this.textBytes += Buffer.byteLength(delta.text, 'utf8');
-      }
+      // UTF-8 bytes, not UTF-16 length: the settle-side fallback treats this
+      // as a token UPPER bound (tokens ≤ bytes), so a token-dense (CJK)
+      // aborted stream cannot under-record output cost (S8/S1).
+      this.outputBytes += outputBytesIn(data.delta, NON_OUTPUT_DELTA_KEYS);
     }
   }
 
@@ -72,8 +85,12 @@ class AnthropicStreamParser implements StreamUsageParser {
     return this.merged;
   }
 
-  observedTextBytes(): number {
-    return this.textBytes;
+  hasFinalUsage(): boolean {
+    return this.sawDeltaUsage && this.sawStop;
+  }
+
+  observedOutputBytes(): number {
+    return this.outputBytes;
   }
 }
 

@@ -194,6 +194,9 @@ describe('provider-failure probes (fail closed, never open)', () => {
     expect(entries).toHaveLength(2);
     const result = entries[1] as LedgerEntryV1;
     expect(result.cost.amount).toBeGreaterThan(0); // estimated, never free
+    // …and never below the reservation: a stream without its final usage is
+    // an outcome-unknown call (S-1).
+    expect(result.cost.amount).toBeGreaterThanOrEqual((entries[0] as LedgerEntryV1).cost.amount);
     expect(result.cost.tokens_in).toBe(500);
     expect(await verifySpendProjection(gw.ledger)).toMatchObject({ ok: true });
     await gw.close();
@@ -236,6 +239,8 @@ describe('provider-failure probes (fail closed, never open)', () => {
 
     const { entries } = readLedger(gw.dbPath);
     expect(entries).toHaveLength(2); // intent + settled result, no dangling reservation
+    const [intent, result] = entries as [LedgerEntryV1, LedgerEntryV1];
+    expect(result.cost.amount).toBeGreaterThanOrEqual(intent.cost.amount); // S-1
     expect(await verifySpendProjection(gw.ledger)).toMatchObject({ ok: true });
     await gw.close();
   }, 15_000);
