@@ -1953,7 +1953,7 @@ Each acceptance test was written first and watched fail on the pre-fix code,
 then driven green. **`packages/spec` untouched — no schema bump** (W-3 changes
 stored bytes, not the hash preimage). No red-team assertion loosened (R5).
 Full local gate green: build · typecheck · lint (+ license boundaries + turbo
-boundaries) · test **725** (was 659: cli 24→42, verifier 62→76, ledger 71→82,
+boundaries) · test **726** (was 659: cli 24→43, verifier 62→76, ledger 71→82,
 witness-protocol 46→56, witness 19→27, dashboard 17→22; embedded-Postgres
 suites ran, 0 skipped) · red-team **210** (was 190: ledger 38→48, witness
 12→19, cli 0→3 — a new red-team suite) · all five demos · smoke / stack-smoke /

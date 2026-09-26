@@ -138,6 +138,28 @@ describe('W-1: verify --witness binds the witnessed source to the verifying key'
     expect(output.lines.join('\n')).toContain('TRUNCATION DETECTED');
   });
 
+  test('directory mode, empty chain: a never-witnessed directory key does not mask the verdict in --json', async () => {
+    witness = await startWitness();
+    const { dbPath, doorKey } = await honestLedger(witness, 0);
+    await witnessCurrentTree(witness, dbPath, doorKey); // the empty tree, witnessed
+    const stranger = loadOrCreateDoorKey(tmp('stranger.pem')); // in the directory, never witnessed
+    const path = tmp('two-keys.json');
+    (await import('node:fs')).writeFileSync(
+      path,
+      JSON.stringify({
+        keys: [doorKey, stranger].map((key) => ({
+          kty: 'OKP',
+          crv: 'Ed25519',
+          x: Buffer.from(key.publicKeyHex, 'hex').toString('base64url'),
+        })),
+      })
+    );
+    const output = await runVerify(dbPath, { keyDirectory: path, witness: witnessOption() });
+    expect(output.exitCode).toBe(0);
+    expect(output.json.witness?.consistency?.status).toBe('identical');
+    expect(output.json.witness?.sources).toHaveLength(2);
+  });
+
   test('self-anchored honest run labels the witness line as a self-declared source', async () => {
     witness = await startWitness();
     const { dbPath } = await honestLedger(witness, 3);

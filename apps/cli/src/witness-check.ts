@@ -103,10 +103,13 @@ export async function bindWitnessSources(
   return { mode: 'self-declared', sourceIds: [bound], declared, mismatch };
 }
 
+// Ranks the aggregate verdict: a contradiction outranks everything; a
+// consistent source outranks one the witness never saw (directory mode may
+// include keys with no history — they neither pass nor fail the run alone).
 const SEVERITY: Record<ConsistencyStatus['status'] | 'none', number> = {
+  none: -1,
   identical: 0,
   extended: 0,
-  none: 1,
   rollback: 2,
   inconsistent: 3,
 };
