@@ -19,6 +19,13 @@ export {
   type KeyDirectory,
 } from './directory.js';
 export {
+  parseStoredEntries,
+  parseStoredEntry,
+  type StoredEntriesResult,
+  type StoredEntryParse,
+  type StoredEntryRow,
+} from './stored.js';
+export {
   EMPTY_TREE_ROOT,
   computeTreeHead,
   consistencyProof,
@@ -51,7 +58,9 @@ export type VerifyFailureCode =
   | 'KEY_MISMATCH'
   | 'KEY_UNKNOWN'
   | 'KEY_EXPIRED'
-  | 'SIGNATURE_INVALID';
+  | 'SIGNATURE_INVALID'
+  /** A stored row has more than one reading, or its columns disagree with it (W-3). */
+  | 'STORAGE_MISMATCH';
 
 export interface VerifyFailure {
   code: VerifyFailureCode;

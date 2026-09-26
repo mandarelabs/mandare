@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 
-import { readLedger } from '@mandarelabs/ledger';
+import { readLedgerRows } from '@mandarelabs/ledger';
 
 import { buildApprovalReport, type ApprovalReport } from './approval-report.js';
 import { buildSpendReport, type SpendReport } from './spend-report.js';
@@ -10,6 +10,7 @@ import {
   computeTreeHead,
   inclusionProof,
   parseKeyDirectory,
+  parseStoredEntries,
   verifyChain,
   type KeyDirectory,
   type TreeHead,
@@ -96,7 +97,12 @@ export async function runVerify(
   dbPath: string,
   options: VerifyOptions = {}
 ): Promise<VerifyCommandOutput> {
-  const { meta, entries } = readLedger(dbPath);
+  const { meta, rows } = readLedgerRows(dbPath);
+  // W-3: every stored row must have ONE reading (no duplicate keys) and match
+  // its seq/entry_hash columns — otherwise the chain below would prove the
+  // JSON.parse reading while SQL readers (dashboards, BI) show another.
+  const stored = parseStoredEntries(rows);
+  const entries = stored.ok ? stored.entries : [];
   // iat for the status-list render only (does not affect the bitstring bytes).
   const nowSeconds = Math.floor(Date.now() / 1000);
   // Out-of-band anchors beat the file's self-declared key: an attacker with
@@ -105,12 +111,14 @@ export async function runVerify(
   const directory =
     options.keyDirectory === undefined ? undefined : await loadKeyDirectory(options.keyDirectory);
   const selfAnchored = options.doorPublicKey === undefined && directory === undefined;
-  const result = await verifyChain(
-    entries,
-    directory !== undefined
-      ? { keyDirectory: directory }
-      : { doorPublicKey: options.doorPublicKey ?? meta.door_public_key }
-  );
+  const result: VerifyResult = stored.ok
+    ? await verifyChain(
+        entries,
+        directory !== undefined
+          ? { keyDirectory: directory }
+          : { doorPublicKey: options.doorPublicKey ?? meta.door_public_key }
+      )
+    : { ok: false, entries: stored.entries, failure: stored.failure };
 
   const lines = [
     `ledger:   ${dbPath}`,

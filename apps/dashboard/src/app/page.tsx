@@ -30,6 +30,17 @@ export default async function FleetPage() {
         Fleet <span className="dead">· door {snapshot.doorId ?? 'unknown'}</span>
       </h1>
 
+      {snapshot.unreadableRows > 0 ? (
+        <div className="empty">
+          <strong className="bad">
+            {snapshot.unreadableRows} ledger row{snapshot.unreadableRows === 1 ? '' : 's'} failed the
+            stored-row check
+          </strong>{' '}
+          — their stored text can be read more than one way (tampering signature). They are left out of
+          every figure below; run <code>mandare verify</code> for the seq numbers.
+        </div>
+      ) : null}
+
       <div className="badge-row">
         <div className="badge">
           <div className="label">Chain</div>

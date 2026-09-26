@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -131,5 +132,61 @@ describe('dashboard data layer over a real ledger', () => {
   it('missing DB → null snapshot, empty trail (no throw)', () => {
     expect(readSnapshot(join(dir, 'nope.db'))).toBeNull();
     expect(readTrail(join(dir, 'nope.db'))).toHaveLength(0);
+  });
+});
+
+describe('W-3: the dashboard renders the verified reading, never a second parser\'s', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mandare-dash-w3-'));
+  const dbPath = join(dir, 'ledger.db');
+
+  beforeAll(async () => {
+    const store = SqliteStore.open(dbPath);
+    const ledger = await AsyncLedger.open(store, { doorId: 'gateway:dash-w3', keyPath: `${dbPath}.doorkey.pem` });
+    for (let i = 0; i < 3; i += 1) {
+      await ledger.append({
+        actor: AGENT,
+        mandate_id: MANDATE,
+        action: { type: LLM_CALL_RESULT, target: 'anthropic:/v1/messages', request_hash: 'd'.repeat(64) },
+        cost: { amount: 1_000, currency: 'EUR', tokens_in: 1, tokens_out: 1 },
+      });
+    }
+    await ledger.close();
+    // File-level attacker (no key): drop the storage locks, prepend forged
+    // duplicate keys to seq 2. json_extract (first key wins) would render
+    // them; JSON.parse — what `mandare verify` hashes — would not.
+    const db = new DatabaseSync(dbPath);
+    for (const { name } of db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger'").all() as {
+      name: string;
+    }[]) {
+      db.exec(`DROP TRIGGER "${name}";`);
+    }
+    const { entry_json } = db.prepare('SELECT entry_json FROM ledger_entries WHERE seq = 2').get() as {
+      entry_json: string;
+    };
+    db.prepare('UPDATE ledger_entries SET entry_json = ? WHERE seq = 2').run(
+      `{"actor":"did:example:forged","cost":{"amount":999000000,"currency":"EUR","tokens_in":0,"tokens_out":0},${entry_json.slice(1)}`
+    );
+    db.close();
+  });
+
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('trail: the forged row is flagged as a storage mismatch, its forged fields never shown', () => {
+    const rows = readTrail(dbPath, 10);
+    expect(rows).toHaveLength(3);
+    const forged = rows.find((row) => row.seq === 2);
+    expect(forged?.storageOk).toBe(false);
+    expect(forged?.actor).not.toBe('did:example:forged');
+    expect(forged?.amountMicros).toBe(0);
+    expect(rows.filter((row) => row.storageOk)).toHaveLength(2);
+  });
+
+  it('snapshot: the forged actor and amount never reach the fleet view; the mismatch is counted', () => {
+    const snapshot = readSnapshot(dbPath);
+    expect(snapshot?.agents.map((row) => row.actor)).not.toContain('did:example:forged');
+    expect(snapshot?.agents.find((row) => row.actor === AGENT)?.settledMicros).toBe(2_000);
+    expect(snapshot?.unreadableRows).toBe(1);
   });
 });

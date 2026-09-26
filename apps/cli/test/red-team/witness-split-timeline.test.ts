@@ -43,7 +43,8 @@ function mandareVerify(dbPath: string, extra: string[]): Promise<{ code: number;
   });
 }
 
-describe('FRESH-SOURCE SPLIT TIMELINE: verify --witness cannot be repointed', () => {
+// Each case spawns the real binary (cold Node start per run) — a generous budget, no retries.
+describe('FRESH-SOURCE SPLIT TIMELINE: verify --witness cannot be repointed', { timeout: 30_000 }, () => {
   test('TRUNCATE + fresh source + repoint (no key needed) → exit 1, TRUNCATION DETECTED', async () => {
     witness = await startWitness();
     const { dbPath, doorKey } = await honestLedger(witness, 5);

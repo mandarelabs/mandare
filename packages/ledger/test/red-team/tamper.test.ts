@@ -12,9 +12,10 @@ import {
   hexToBytes,
   sha256Hex,
   type LedgerEntryPreimage,
+  canonicalJson,
   type LedgerEntryV1,
 } from '@mandarelabs/spec';
-import { verifyChain } from '@mandarelabs/verifier';
+import { parseStoredEntries, verifyChain } from '@mandarelabs/verifier';
 
 import {
   computeTreeHead,
@@ -24,7 +25,7 @@ import {
   verifyConsistency,
 } from '@mandarelabs/verifier';
 
-import { Ledger, readLedger } from '../../src/ledger.js';
+import { Ledger, readLedger, readLedgerRows } from '../../src/ledger.js';
 import { buildChainDb, sampleInput } from '../helpers.js';
 
 /**
@@ -78,6 +79,94 @@ describe('storage enforcement (first line of defense)', () => {
       db.exec("UPDATE ledger_meta SET value = 'ff' WHERE key = 'door_public_key';")
     ).toThrow(/write-once/);
     db.close();
+  });
+});
+
+describe('W-3: no in-place rewrite with the triggers intact (INSERT OR REPLACE)', () => {
+  // SQLite's REPLACE deletes the conflicting row WITHOUT firing DELETE
+  // triggers (recursive_triggers is off), so UPDATE/DELETE triggers alone let
+  // `INSERT OR REPLACE` rewrite history. BEFORE INSERT triggers close it.
+  test('REPLACE of an existing seq is refused', () => {
+    const { dbPath } = buildChainDb(3);
+    const db = rawDb(dbPath);
+    expect(() =>
+      db.exec(`INSERT OR REPLACE INTO ledger_entries (seq, entry_hash, prev_hash, entry_json)
+               SELECT seq, entry_hash, prev_hash, '{}' FROM ledger_entries WHERE seq = 2;`)
+    ).toThrow(/append-only/);
+    db.close();
+  });
+
+  test('REPLACE via an entry_hash collision at a NEW seq is refused (it would delete the old row)', () => {
+    const { dbPath } = buildChainDb(3);
+    const db = rawDb(dbPath);
+    expect(() =>
+      db.exec(`INSERT OR REPLACE INTO ledger_entries (seq, entry_hash, prev_hash, entry_json)
+               SELECT 99, entry_hash, prev_hash, entry_json FROM ledger_entries WHERE seq = 2;`)
+    ).toThrow(/append-only/);
+    expect((db.prepare('SELECT COUNT(*) AS n FROM ledger_entries').get() as { n: number }).n).toBe(3);
+    db.close();
+  });
+
+  test('REPLACE of a meta row (door_key_id repoint) is refused', () => {
+    const { dbPath } = buildChainDb(1);
+    const db = rawDb(dbPath);
+    expect(() =>
+      db.exec("INSERT OR REPLACE INTO ledger_meta (key, value) VALUES ('door_key_id', 'ff');")
+    ).toThrow(/write-once/);
+    db.close();
+  });
+});
+
+describe('W-3: one stored text, one reading (duplicate-key parser differential)', () => {
+  function forgeDuplicateKeys(dbPath: string, seq: number): void {
+    const db = rawDb(dbPath);
+    for (const { name } of db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger'").all() as {
+      name: string;
+    }[]) {
+      db.exec(`DROP TRIGGER "${name}";`);
+    }
+    const { entry_json } = db.prepare('SELECT entry_json FROM ledger_entries WHERE seq = ?').get(seq) as {
+      entry_json: string;
+    };
+    // First-key-wins readers (SQLite json_extract) see the forgery; last-key-wins
+    // JSON.parse — what the verifier hashes — still sees the genuine entry.
+    const forged = `{"actor":"did:example:forged","cost":{"amount":999000000,"currency":"EUR","tokens_in":0,"tokens_out":0},${entry_json.slice(1)}`;
+    db.prepare('UPDATE ledger_entries SET entry_json = ? WHERE seq = ?').run(forged, seq);
+    db.close();
+  }
+
+  test('DUPLICATE KEYS: the hash chain alone stays VALID — the stored-row check convicts', async () => {
+    const { dbPath } = buildChainDb(3);
+    forgeDuplicateKeys(dbPath, 2);
+
+    // The differential, demonstrated: the chain verifies, SQL shows the forgery.
+    expect((await verify(dbPath)).ok).toBe(true);
+    const db = rawDb(dbPath);
+    const shown = db.prepare("SELECT json_extract(entry_json, '$.actor') AS actor FROM ledger_entries WHERE seq = 2").get() as {
+      actor: string;
+    };
+    db.close();
+    expect(shown.actor).toBe('did:example:forged');
+
+    const stored = parseStoredEntries(readLedgerRows(dbPath).rows);
+    expect(stored.ok).toBe(false);
+    if (!stored.ok) {
+      expect(stored.failure.code).toBe('STORAGE_MISMATCH');
+      expect(stored.failure.seq).toBe(2);
+    }
+  });
+
+  test('the doors store canonical JSON, so an honest ledger passes the stored-row check', async () => {
+    const { dbPath, publicKeyHex } = buildChainDb(3);
+    const { rows } = readLedgerRows(dbPath);
+    const stored = parseStoredEntries(rows);
+    expect(stored.ok).toBe(true);
+    if (stored.ok) {
+      for (const [index, entry] of stored.entries.entries()) {
+        expect(rows[index]?.text).toBe(canonicalJson(entry));
+      }
+      expect((await verifyChain(stored.entries, { doorPublicKey: publicKeyHex })).ok).toBe(true);
+    }
   });
 });
 
@@ -152,6 +241,9 @@ describe('tampering past storage enforcement still fails verification', () => {
   test('REPLAY (in-place): same seq twice is impossible (PRIMARY KEY)', () => {
     const { dbPath } = buildChainDb(2);
     const db = rawDb(dbPath);
+    // The W-3 BEFORE INSERT trigger refuses this first; remove it so the
+    // PRIMARY KEY is proven as an independent layer (the trigger has its own tests).
+    db.exec('DROP TRIGGER ledger_entries_no_replace;');
     expect(() =>
       db.exec(`
         INSERT INTO ledger_entries (seq, entry_hash, prev_hash, entry_json)

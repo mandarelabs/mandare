@@ -1,6 +1,6 @@
 import pg from 'pg';
 
-import type { LedgerEntryV1 } from '@mandarelabs/spec';
+import { canonicalJson, type LedgerEntryV1 } from '@mandarelabs/spec';
 
 import type { LedgerHead } from './entry.js';
 import type { SpendCounter } from './projection.js';
@@ -11,6 +11,7 @@ import {
   type ProjectionTx,
   type Projector,
   type RevocationRecord,
+  type StoredRow,
 } from './store.js';
 
 /**
@@ -23,7 +24,9 @@ import {
  *    on missing grants before any trigger fires.
  * 2. `BEFORE UPDATE OR DELETE … RAISE EXCEPTION` triggers — so even roles
  *    with broader table grants (a sloppy migration, a DBA habit) cannot
- *    mutate history without EXPLICITLY dropping the triggers first.
+ *    mutate history without EXPLICITLY dropping the triggers first — plus
+ *    `BEFORE INSERT` triggers refusing any row that collides with an
+ *    existing seq / entry_hash / meta key (W-3, parity with SQLite).
  *
  * Documented boundary (same as Q7): a superuser can drop the triggers and
  * rewrite the file — that is exactly what witnessing (S6) exists to catch;
@@ -65,6 +68,32 @@ DROP TRIGGER IF EXISTS ledger_meta_write_once ON ledger_meta;
 CREATE TRIGGER ledger_meta_write_once
   BEFORE UPDATE OR DELETE ON ledger_meta
   FOR EACH ROW EXECUTE FUNCTION mandare_meta_write_once();
+-- W-3 parity with SQLite: a colliding INSERT is an append-only violation
+-- (not merely a key clash), whatever conflict clause it carries.
+CREATE OR REPLACE FUNCTION mandare_ledger_no_replace() RETURNS trigger AS $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM ledger_entries WHERE seq = NEW.seq OR entry_hash = NEW.entry_hash) THEN
+    RAISE EXCEPTION 'ledger is append-only';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+CREATE OR REPLACE FUNCTION mandare_meta_no_replace() RETURNS trigger AS $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM ledger_meta WHERE key = NEW.key) THEN
+    RAISE EXCEPTION 'ledger meta is write-once';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS ledger_entries_no_replace ON ledger_entries;
+CREATE TRIGGER ledger_entries_no_replace
+  BEFORE INSERT ON ledger_entries
+  FOR EACH ROW EXECUTE FUNCTION mandare_ledger_no_replace();
+DROP TRIGGER IF EXISTS ledger_meta_no_replace ON ledger_meta;
+CREATE TRIGGER ledger_meta_no_replace
+  BEFORE INSERT ON ledger_meta
+  FOR EACH ROW EXECUTE FUNCTION mandare_meta_no_replace();
 -- Spend-counter PROJECTION (S2): derived from the ledger, rebuildable from
 -- it at any time — deliberately mutable, so NO append-only protection here.
 -- Integrity comes from replay(ledger) == counters, not from storage locks.
@@ -169,7 +198,7 @@ export class PgStore implements LedgerStore {
       const entry = build(await headWithClient(client));
       await client.query(
         'INSERT INTO ledger_entries (seq, entry_hash, prev_hash, entry_json) VALUES ($1, $2, $3, $4)',
-        [entry.seq, entry.entry_hash, entry.prev_hash, JSON.stringify(entry)]
+        [entry.seq, entry.entry_hash, entry.prev_hash, canonicalJson(entry)]
       );
       await client.query('COMMIT');
       return entry;
@@ -199,7 +228,7 @@ export class PgStore implements LedgerStore {
         insert: async (entry) => {
           await client.query(
             'INSERT INTO ledger_entries (seq, entry_hash, prev_hash, entry_json) VALUES ($1, $2, $3, $4)',
-            [entry.seq, entry.entry_hash, entry.prev_hash, JSON.stringify(entry)]
+            [entry.seq, entry.entry_hash, entry.prev_hash, canonicalJson(entry)]
           );
         },
       });
@@ -272,6 +301,14 @@ export class PgStore implements LedgerStore {
       'SELECT entry_json FROM ledger_entries ORDER BY seq ASC'
     );
     return result.rows.map((row) => JSON.parse(row.entry_json) as unknown);
+  }
+
+  async readAllRows(): Promise<StoredRow[]> {
+    const result = await this.pool.query<{ seq: string; entry_hash: string; entry_json: string }>(
+      'SELECT seq, entry_hash, entry_json FROM ledger_entries ORDER BY seq ASC'
+    );
+    // BIGINT arrives as a string; seq is bounded far below 2^53 (tree sizes ≤ 2^31).
+    return result.rows.map((row) => ({ seq: Number(row.seq), entry_hash: row.entry_hash, text: row.entry_json }));
   }
 
   async readEntryHashes(): Promise<string[]> {

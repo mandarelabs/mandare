@@ -40,10 +40,24 @@ export interface ProjectionKV extends CounterKV, RevocationKV {}
  *
  * Storage-enforcement duties of every driver (integrity lock 2):
  * - entries and meta must reject UPDATE/DELETE at the storage layer
- *   (SQLite triggers; Postgres INSERT-only grants + RAISE triggers);
+ *   (SQLite triggers; Postgres INSERT-only grants + RAISE triggers), and
+ *   any INSERT that collides with an existing row (W-3: SQLite's REPLACE
+ *   would otherwise rewrite in place without firing DELETE triggers);
+ * - entries are stored as canonical JSON — one text, one reading (W-3);
  * - `seq` is the primary key: in-place replays die on the constraint;
  * - appends allocate seq under an exclusive lock so writers cannot race.
  */
+
+/**
+ * One entry row exactly as stored: the `seq` and `entry_hash` columns plus
+ * the persisted text. Unparsed on purpose — the stored-row check (verifier
+ * `parseStoredEntries`, W-3) must see the bytes, not a parser's reading.
+ */
+export interface StoredRow {
+  seq: number;
+  entry_hash: string;
+  text: string;
+}
 
 export interface LedgerMeta {
   schema_version: number;
@@ -113,6 +127,8 @@ export interface LedgerStore {
   initMeta(rows: readonly [string, string][]): Promise<void>;
   /** All entries in seq order, JSON-parsed but UNVALIDATED (verifier's job). */
   readAllEntries(): Promise<unknown[]>;
+  /** Raw stored rows in seq order, for the stored-row check (W-3). */
+  readAllRows(): Promise<StoredRow[]>;
   /**
    * Entry hashes only, in seq order — the witness client's read path (S6).
    * Cheap by construction: no JSON parse, no entry contents leave the store.

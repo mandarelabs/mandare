@@ -67,6 +67,30 @@ describe('mandare verify', () => {
     expect(text).toContain('seq 2');
   });
 
+  test('W-3: forged duplicate keys (first-key-wins readers see a forgery) → exit 1, STORAGE_MISMATCH', async () => {
+    const { dbPath, doorPublicKeyHex } = buildDb(3);
+    const db = new DatabaseSync(dbPath);
+    for (const { name } of db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger'").all() as {
+      name: string;
+    }[]) {
+      db.exec(`DROP TRIGGER "${name}";`);
+    }
+    const { entry_json } = db.prepare('SELECT entry_json FROM ledger_entries WHERE seq = 2').get() as {
+      entry_json: string;
+    };
+    db.prepare('UPDATE ledger_entries SET entry_json = ? WHERE seq = 2').run(
+      `{"actor":"did:example:forged",${entry_json.slice(1)}`
+    );
+    db.close();
+
+    const output = await runVerify(dbPath, { doorPublicKey: doorPublicKeyHex });
+    expect(output.exitCode).toBe(1);
+    const text = output.lines.join('\n');
+    expect(text).toContain('INVALID');
+    expect(text).toContain('STORAGE_MISMATCH');
+    expect(text).toContain('seq 2');
+  });
+
   test('missing file → throws (main maps to exit 1)', async () => {
     await expect(runVerify('/nonexistent/ledger.db')).rejects.toThrow();
   });

@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 
-import type { LedgerEntryV1 } from '@mandarelabs/spec';
+import { canonicalJson, type LedgerEntryV1 } from '@mandarelabs/spec';
 
 import type { LedgerHead } from './entry.js';
 import type { SpendCounter } from './projection.js';
@@ -11,6 +11,7 @@ import {
   type ProjectionTx,
   type Projector,
   type RevocationRecord,
+  type StoredRow,
 } from './store.js';
 
 /**
@@ -43,6 +44,18 @@ CREATE TRIGGER IF NOT EXISTS ledger_meta_no_update
   BEGIN SELECT RAISE(ABORT, 'ledger meta is write-once'); END;
 CREATE TRIGGER IF NOT EXISTS ledger_meta_no_delete
   BEFORE DELETE ON ledger_meta
+  BEGIN SELECT RAISE(ABORT, 'ledger meta is write-once'); END;
+-- W-3: INSERT OR REPLACE deletes the conflicting row WITHOUT firing DELETE
+-- triggers (recursive_triggers is off), so the two triggers above alone let
+-- it rewrite history in place. Refuse any insert that would collide.
+CREATE TRIGGER IF NOT EXISTS ledger_entries_no_replace
+  BEFORE INSERT ON ledger_entries
+  WHEN EXISTS (SELECT 1 FROM ledger_entries WHERE seq = NEW.seq)
+    OR EXISTS (SELECT 1 FROM ledger_entries WHERE entry_hash = NEW.entry_hash)
+  BEGIN SELECT RAISE(ABORT, 'ledger is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS ledger_meta_no_replace
+  BEFORE INSERT ON ledger_meta
+  WHEN EXISTS (SELECT 1 FROM ledger_meta WHERE key = NEW.key)
   BEGIN SELECT RAISE(ABORT, 'ledger meta is write-once'); END;
 -- Spend-counter PROJECTION (S2): derived from the ledger, rebuildable from
 -- it at any time — deliberately mutable, so NO append-only triggers here.
@@ -88,6 +101,14 @@ export function openSqliteDatabase(dbPath: string): DatabaseSync {
   db.exec('PRAGMA busy_timeout = 5000;');
   db.exec(CREATE_SCHEMA);
   return db;
+}
+
+/** Raw entry rows in seq order — the stored-row check's input (W-3). */
+export function readStoredRowsSync(db: DatabaseSync): StoredRow[] {
+  const rows = db
+    .prepare('SELECT seq, entry_hash, entry_json FROM ledger_entries ORDER BY seq ASC')
+    .all() as { seq: number; entry_hash: string; entry_json: string }[];
+  return rows.map((row) => ({ seq: row.seq, entry_hash: row.entry_hash, text: row.entry_json }));
 }
 
 export class SqliteStore implements LedgerStore {
@@ -181,7 +202,7 @@ export class SqliteStore implements LedgerStore {
       .prepare(
         'INSERT INTO ledger_entries (seq, entry_hash, prev_hash, entry_json) VALUES (?, ?, ?, ?)'
       )
-      .run(entry.seq, entry.entry_hash, entry.prev_hash, JSON.stringify(entry));
+      .run(entry.seq, entry.entry_hash, entry.prev_hash, canonicalJson(entry));
   }
 
   head(): Promise<LedgerHead | null> {
@@ -211,6 +232,10 @@ export class SqliteStore implements LedgerStore {
       .prepare('SELECT entry_json FROM ledger_entries ORDER BY seq ASC')
       .all() as { entry_json: string }[];
     return Promise.resolve(rows.map((row) => JSON.parse(row.entry_json) as unknown));
+  }
+
+  readAllRows(): Promise<StoredRow[]> {
+    return Promise.resolve(readStoredRowsSync(this.db));
   }
 
   readEntryHashes(): Promise<string[]> {

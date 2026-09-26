@@ -1,14 +1,14 @@
 import { DatabaseSync } from 'node:sqlite';
 
-import type { LedgerEntryV1 } from '@mandarelabs/spec';
+import { canonicalJson, type LedgerEntryV1 } from '@mandarelabs/spec';
 
 import { loadOrCreateDoorKey, type DoorKey } from './door-key.js';
 import { buildEntry, type AppendInput, type LedgerHead } from './entry.js';
-import { openSqliteDatabase } from './sqlite-store.js';
-import { assertDoorOwnsMeta, metaFromRows, newMetaRows, type LedgerMeta } from './store.js';
+import { openSqliteDatabase, readStoredRowsSync } from './sqlite-store.js';
+import { assertDoorOwnsMeta, metaFromRows, newMetaRows, type LedgerMeta, type StoredRow } from './store.js';
 
 export type { AppendInput, LedgerHead } from './entry.js';
-export type { LedgerMeta } from './store.js';
+export type { LedgerMeta, StoredRow } from './store.js';
 
 /**
  * Append-only, hash-chained ledger on `node:sqlite` (BUILD-DECISIONS Q7) —
@@ -20,7 +20,8 @@ export type { LedgerMeta } from './store.js';
  * - lock 1 (privilege separation): this module is meant to run inside a door
  *   process; the agent gets no handle to it.
  * - lock 2 (append-only): no update/delete API; SQLite triggers RAISE on
- *   UPDATE/DELETE; monotonic seq without gaps.
+ *   UPDATE/DELETE and on any colliding INSERT (incl. INSERT OR REPLACE);
+ *   monotonic seq without gaps; entries stored as canonical JSON.
  * Locks 3–5 (log-before-act, witnessing, witness-ack) live in the doors (S2)
  * and the witness client (S6).
  */
@@ -64,7 +65,7 @@ export class Ledger {
         .prepare(
           'INSERT INTO ledger_entries (seq, entry_hash, prev_hash, entry_json) VALUES (?, ?, ?, ?)'
         )
-        .run(entry.seq, entry.entry_hash, entry.prev_hash, JSON.stringify(entry));
+        .run(entry.seq, entry.entry_hash, entry.prev_hash, canonicalJson(entry));
       this.db.exec('COMMIT;');
       return entry;
     } catch (error) {
@@ -133,6 +134,25 @@ export function readLedger(dbPath: string): { meta: LedgerMeta; entries: unknown
       .all() as { entry_json: string }[];
     const entries = rows.map((row) => JSON.parse(row.entry_json) as unknown);
     return { meta, entries };
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Read a ledger file's raw entry rows for verification (W-3): `mandare
+ * verify` runs the verifier's `parseStoredEntries` over these BEFORE the
+ * chain check, so an entry whose stored text another parser could read
+ * differently (duplicate keys) never reaches a green verdict.
+ */
+export function readLedgerRows(dbPath: string): { meta: LedgerMeta; rows: StoredRow[] } {
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    const meta = readMetaFromDb(db);
+    if (meta === null) {
+      throw new Error(`${dbPath} has no ledger metadata — not a Mandare ledger?`);
+    }
+    return { meta, rows: readStoredRowsSync(db) };
   } finally {
     db.close();
   }

@@ -37,7 +37,8 @@ every attack below that we claim to catch is a permanent test.
 
 | Attack | Caught by | Notes |
 |---|---|---|
-| Edit / delete / reorder entries | `mandare verify` (hash chain + signatures) | append-only triggers refuse in-place too |
+| Edit / delete / reorder entries | `mandare verify` (hash chain + signatures) | append-only triggers also refuse UPDATE, DELETE and colliding INSERTs (incl. SQLite `INSERT OR REPLACE`) — a speed bump only: anyone who can write the file can drop them, which is why verification is the defense |
+| Entry text with two readings (duplicate JSON keys) | `mandare verify` stored-row check (`STORAGE_MISMATCH`) | doors store canonical JSON; a row whose text is not a single-reading encoding, or whose seq/hash columns disagree with it, fails verification — the dashboard renders only rows that pass |
 | Gap injection / replay / splice | chain verify + projection replay | duplicate card-auth intents explode on replay |
 | Counter tampering | `--spend` (replay(ledger) == counters) | stale vs divergent distinguished |
 | Truncation / restore-older-copy | `--witness` (witnessed head history) | invisible to self-anchored verification — that is WHY the witness exists |

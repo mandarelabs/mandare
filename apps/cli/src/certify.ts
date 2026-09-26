@@ -1,12 +1,13 @@
 import { readFile, writeFile } from 'node:fs/promises';
 
-import { readLedger, replayRevocation } from '@mandarelabs/ledger';
+import { readLedgerRows, replayRevocation } from '@mandarelabs/ledger';
 import { AGENT_STATUS_LIST_ID, buildStatusListPayload } from '@mandarelabs/vault';
 import { hexToBytes, isLedgerEntry, sha256HexAsync, type LedgerEntryV1 } from '@mandarelabs/spec';
 import {
   computeTreeHead,
   consistencyProof,
   inclusionProof,
+  parseStoredEntries,
   verifyChain,
   verifyConsistency,
 } from '@mandarelabs/verifier';
@@ -51,7 +52,16 @@ export async function runCertify(
   dbPath: string,
   options: CertifyOptions
 ): Promise<number> {
-  const { meta, entries } = readLedger(dbPath);
+  const { meta, rows } = readLedgerRows(dbPath);
+  const stored = parseStoredEntries(rows);
+  if (!stored.ok) {
+    process.stderr.write(
+      `certify: REFUSED — stored entry at seq ${stored.failure.seq ?? '?'} is unsound: ` +
+        `[${stored.failure.code}] ${stored.failure.reason}\n`
+    );
+    return 1;
+  }
+  const entries = stored.entries;
 
   // 0. The certified source must BE the key the chain verifies under (W-1 /
   //    S8/C1): a repointed door_key_id would fetch — and embed — another

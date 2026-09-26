@@ -66,6 +66,9 @@ importers:
       '@mandarelabs/cli':
         specifier: workspace:*
         version: link:../cli
+      '@mandarelabs/verifier':
+        specifier: workspace:*
+        version: link:../../packages/verifier
       next:
         specifier: ~15.5.0
         version: 15.5.22(react-dom@19.2.8(react@19.2.8))(react@19.2.8)

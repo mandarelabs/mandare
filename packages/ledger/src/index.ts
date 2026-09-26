@@ -3,8 +3,8 @@
  * (AGPL-3.0-only).
  */
 
-export { Ledger, readLedger } from './ledger.js';
-export type { AppendInput, LedgerHead, LedgerMeta } from './ledger.js';
+export { Ledger, readLedger, readLedgerRows } from './ledger.js';
+export type { AppendInput, LedgerHead, LedgerMeta, StoredRow } from './ledger.js';
 export { AsyncLedger } from './async-ledger.js';
 export { buildEntry } from './entry.js';
 export { SqliteStore, openSqliteDatabase } from './sqlite-store.js';

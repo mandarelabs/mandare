@@ -6,8 +6,14 @@ Append-only, hash-chained, door-signed event store on `node:sqlite`
 ## Invariants
 
 - **No update/delete path exists** — not in the API, and SQLite triggers RAISE
-  on UPDATE/DELETE (`ledger is append-only`). Corrections are new entries
+  on UPDATE/DELETE and on any INSERT colliding with an existing seq /
+  entry_hash / meta key (`ledger is append-only`; W-3: `INSERT OR REPLACE`
+  deletes without firing DELETE triggers). Corrections are new entries
   referencing `correction_of`.
+- **Entries are stored as `canonicalJson(entry)`** — one text, one reading.
+  Readers that verify go through `readLedgerRows` + the verifier's
+  `parseStoredEntries` (W-3); never read entry fields with SQL `json_extract`
+  (first-key-wins on duplicate keys, unlike `JSON.parse`).
 - seq starts at 1, strictly +1; `BEGIN IMMEDIATE` around head-read + insert.
 - Entries are validated (`parseLedgerEntry`) BEFORE insert — nothing
   schema-invalid can enter the chain.

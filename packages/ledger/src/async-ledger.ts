@@ -11,6 +11,7 @@ import {
   type LedgerStore,
   type ProjectionTx,
   type Projector,
+  type StoredRow,
 } from './store.js';
 
 /**
@@ -120,6 +121,11 @@ export class AsyncLedger {
       throw new Error('ledger store has no metadata — not a Mandare ledger?');
     }
     return { meta: metaFromRows(rows), entries: await this.store.readAllEntries() };
+  }
+
+  /** Raw stored rows, for the verifier's stored-row check (W-3). */
+  readAllRows(): Promise<StoredRow[]> {
+    return this.store.readAllRows();
   }
 
   close(): Promise<void> {

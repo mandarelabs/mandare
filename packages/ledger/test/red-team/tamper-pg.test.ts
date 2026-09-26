@@ -6,10 +6,11 @@ import EmbeddedPostgres from 'embedded-postgres';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 
-import { LLM_CALL_INTENT, computeEntryHash, hexToBytes } from '@mandarelabs/spec';
+import { LLM_CALL_INTENT, canonicalJson, computeEntryHash, hexToBytes } from '@mandarelabs/spec';
 import {
   computeTreeHead,
   consistencyProof,
+  parseStoredEntries,
   verifyChain,
   verifyConsistency,
 } from '@mandarelabs/verifier';
@@ -182,13 +183,42 @@ describe('append-only triggers (layer 2: holds even with table privileges)', () 
 describe('in-place replay is impossible (PRIMARY KEY)', () => {
   test('same seq twice violates the constraint even for superuser', async () => {
     const client = await adminClient();
+    // The W-3 BEFORE INSERT trigger refuses this first; disable it so the
+    // PRIMARY KEY is proven as an independent layer (the trigger has its own tests).
+    await client.query('ALTER TABLE ledger_entries DISABLE TRIGGER ledger_entries_no_replace');
+    try {
+      await expect(
+        client.query(`
+          INSERT INTO ledger_entries (seq, entry_hash, prev_hash, entry_json)
+          SELECT seq, 'bb' || substr(entry_hash, 3), prev_hash, entry_json
+          FROM ledger_entries WHERE seq = 2
+        `)
+      ).rejects.toThrow(/duplicate key|unique/i);
+    } finally {
+      await client.query('ALTER TABLE ledger_entries ENABLE TRIGGER ledger_entries_no_replace');
+      await client.end();
+    }
+  });
+});
+
+describe('W-3: BEFORE INSERT parity — a re-insert is append-only, not just a key clash', () => {
+  test('re-inserting an existing seq dies on the append-only trigger (superuser)', async () => {
+    const client = await adminClient();
     await expect(
       client.query(`
         INSERT INTO ledger_entries (seq, entry_hash, prev_hash, entry_json)
-        SELECT seq, 'bb' || substr(entry_hash, 3), prev_hash, entry_json
+        SELECT seq, 'cc' || substr(entry_hash, 3), prev_hash, entry_json
         FROM ledger_entries WHERE seq = 2
       `)
-    ).rejects.toThrow(/duplicate key|unique/i);
+    ).rejects.toThrow(/append-only/);
+    await client.end();
+  });
+
+  test('re-inserting an existing meta key dies on the write-once trigger (superuser)', async () => {
+    const client = await adminClient();
+    await expect(
+      client.query("INSERT INTO ledger_meta (key, value) VALUES ('door_key_id', 'ff')")
+    ).rejects.toThrow(/write-once/);
     await client.end();
   });
 });
@@ -233,6 +263,27 @@ describe('tampering past storage enforcement still fails verification', () => {
       await client.query('UPDATE ledger_entries SET entry_json = $1 WHERE seq = 2', [
         original.rows[0]?.entry_json,
       ]);
+    });
+  });
+
+  test('DUPLICATE KEYS (W-3): forged keys prepended — chain VALID, stored-row check convicts', async () => {
+    await withTriggersDropped(async (client) => {
+      const original = await client.query<{ entry_json: string }>(
+        'SELECT entry_json FROM ledger_entries WHERE seq = 2'
+      );
+      const text = original.rows[0]?.entry_json ?? '';
+      const forged = `{"actor":"did:example:forged",${text.slice(1)}`;
+      await client.query('UPDATE ledger_entries SET entry_json = $1 WHERE seq = 2', [forged]);
+
+      expect((await verifyPg()).ok).toBe(true); // last-key-wins still hashes the genuine entry
+      const stored = parseStoredEntries(await ledger.readAllRows());
+      expect(stored.ok).toBe(false);
+      if (!stored.ok) {
+        expect(stored.failure.code).toBe('STORAGE_MISMATCH');
+        expect(stored.failure.seq).toBe(2);
+      }
+
+      await client.query('UPDATE ledger_entries SET entry_json = $1 WHERE seq = 2', [text]);
     });
   });
 
@@ -282,6 +333,15 @@ describe('tampering past storage enforcement still fails verification', () => {
 });
 
 describe('driver parity', () => {
+  test('the Postgres door stores canonical JSON (W-3) and passes the stored-row check', async () => {
+    const rows = await ledger.readAllRows();
+    const stored = parseStoredEntries(rows);
+    expect(stored.ok).toBe(true);
+    if (stored.ok) {
+      stored.entries.forEach((entry, index) => expect(rows[index]?.text).toBe(canonicalJson(entry)));
+    }
+  });
+
   test('the Postgres-written chain verifies exactly like a SQLite one', async () => {
     const result = await verifyPg();
     expect(result.ok).toBe(true);

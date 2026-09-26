@@ -5,6 +5,7 @@ import { formatAmount, ledgerDbPath, readTrail } from '@/lib/data';
 export const dynamic = 'force-dynamic';
 
 function chipClass(actionType: string): string {
+  if (actionType === 'storage mismatch') return 'chip denied';
   if (actionType.endsWith('.intent')) return 'chip intent';
   if (actionType.endsWith('.result')) return 'chip result';
   if (actionType.endsWith('.denied') || actionType.endsWith('.failed')) return 'chip denied';
@@ -54,9 +55,12 @@ export default async function TrailPage({
               {rows.map((row) => (
                 <tr key={row.seq}>
                   <td className="num">{row.seq}</td>
-                  <td className="mono">{row.ts.slice(0, 19)}Z</td>
+                  <td className="mono">{row.storageOk ? `${row.ts.slice(0, 19)}Z` : '—'}</td>
                   <td>
                     <span className={chipClass(row.actionType)}>{row.actionType}</span>
+                    {row.storageOk ? null : (
+                      <div className="dead">stored text has more than one reading — run mandare verify</div>
+                    )}
                     {row.target !== null && row.actionType.startsWith('agent.') ? (
                       <div className="mono dead">{row.target}</div>
                     ) : null}
