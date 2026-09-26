@@ -25,6 +25,7 @@ import {
   verifyConsistency,
 } from '@mandarelabs/verifier';
 
+import { loadOrCreateDoorKey, type DoorKey } from '../../src/door-key.js';
 import { Ledger, readLedger, readLedgerRows } from '../../src/ledger.js';
 import { buildChainDb, sampleInput } from '../helpers.js';
 
@@ -509,7 +510,8 @@ describe('multi-door entries & key rotation via key directory', () => {
   test('cross-door chain verifies ONLY when every signing key is in the directory', async () => {
     const { dbPath, publicKeyHex: doorAKey } = buildChainDb(2);
     const { publicKeyHex: doorBKey } = appendForeignDoorEntry(dbPath, {
-      ts: '2026-07-21T13:00:00.000Z',
+      // After door A's entries: since W-4 a chain's timeline may not regress.
+      ts: new Date(Date.now() + 60_000).toISOString(),
       doorId: 'vault:test',
     });
 
@@ -552,6 +554,64 @@ describe('multi-door entries & key rotation via key directory', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.failure.code).toBe('KEY_EXPIRED');
   });
+
+  test('ROTATION + BACKDATE (W-4): a stolen rotated-out key writing behind the new key → TS_REGRESSION', async () => {
+    // Door key A (the ledger's own) is rotated out at T; door key B takes over
+    // and writes. A thief holding A appends a tail entry with ts BACKDATED into
+    // A's window — the per-entry key-window check passes it (ts < exp), so the
+    // only thing that can convict it is the timeline: it claims a time before
+    // B's entry that precedes it in the chain.
+    const { dbPath, publicKeyHex: doorAKey } = buildChainDb(2); // ts = now
+    const now = Date.now();
+    const rotationAt = Math.floor((now + 60_000) / 1000);
+    const { publicKeyHex: doorBKey } = appendForeignDoorEntry(dbPath, {
+      ts: new Date(now + 120_000).toISOString(), // B writes after the rotation
+      doorId: 'gateway:test',
+    });
+    const stolenA = loadOrCreateDoorKey(`${dbPath}.doorkey.pem`);
+    appendSignedEntry(dbPath, stolenA, new Date(now + 30_000).toISOString()); // inside A's window
+
+    const directory = await parseKeyDirectory({
+      keys: [
+        { kty: 'OKP', crv: 'Ed25519', x: hexKeyToB64Url(doorAKey), exp: rotationAt, 'mnd:role': 'door' },
+        { kty: 'OKP', crv: 'Ed25519', x: hexKeyToB64Url(doorBKey), nbf: rotationAt, 'mnd:role': 'door' },
+      ],
+    });
+    const { entries } = readLedger(dbPath);
+    const result = await verifyChain(entries, { keyDirectory: directory });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.code).toBe('TS_REGRESSION');
+      expect(result.failure.seq).toBe(4);
+    }
+    // Control: without the thief's entry the rotated chain verifies.
+    expect((await verifyChain(entries.slice(0, 3), { keyDirectory: directory })).ok).toBe(true);
+  });
+
+  /** Append a tail entry signed with `signer` (legal growth: no trigger dropped). */
+  function appendSignedEntry(dbPath: string, signer: DoorKey, ts: string): void {
+    const db = rawDb(dbPath);
+    const head = db
+      .prepare('SELECT seq, entry_hash, entry_json FROM ledger_entries ORDER BY seq DESC LIMIT 1')
+      .get() as { seq: number; entry_hash: string; entry_json: string };
+    const { entry_hash: _h, door_signature: _s, ...rest } = JSON.parse(head.entry_json) as LedgerEntryV1;
+    const preimage: LedgerEntryPreimage = { ...rest, seq: head.seq + 1, ts, prev_hash: head.entry_hash };
+    const entryHash = computeEntryHash(preimage);
+    const entry: LedgerEntryV1 = {
+      ...preimage,
+      entry_hash: entryHash,
+      door_signature: {
+        alg: 'EdDSA',
+        key_id: signer.keyId,
+        key_provenance: signer.provenance,
+        value: bytesToBase64Url(signer.sign(hexToBytes(entryHash))),
+      },
+    };
+    db.prepare(
+      'INSERT INTO ledger_entries (seq, entry_hash, prev_hash, entry_json) VALUES (?, ?, ?, ?)'
+    ).run(entry.seq, entry.entry_hash, entry.prev_hash, canonicalJson(entry));
+    db.close();
+  }
 
   function hexKeyToB64Url(hex: string): string {
     return bytesToBase64Url(hexToBytes(hex));

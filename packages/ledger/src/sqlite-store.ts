@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 import { canonicalJson, type LedgerEntryV1 } from '@mandarelabs/spec';
 
-import type { LedgerHead } from './entry.js';
+import { headFromRow, type LedgerHead } from './entry.js';
 import type { SpendCounter } from './projection.js';
 import {
   runProjectedAppend,
@@ -419,8 +419,8 @@ export class SqliteStore implements LedgerStore {
 
   private headSync(): LedgerHead | null {
     const row = this.db
-      .prepare('SELECT seq, entry_hash FROM ledger_entries ORDER BY seq DESC LIMIT 1')
-      .get() as { seq: number; entry_hash: string } | undefined;
-    return row === undefined ? null : { seq: row.seq, entry_hash: row.entry_hash };
+      .prepare('SELECT seq, entry_hash, entry_json FROM ledger_entries ORDER BY seq DESC LIMIT 1')
+      .get() as { seq: number; entry_hash: string; entry_json: string } | undefined;
+    return row === undefined ? null : headFromRow(row);
   }
 }

@@ -46,6 +46,8 @@ export interface WitnessJson {
   /** The (first) bound source — never the file's declared id unless they agree. */
   source_id: string;
   source_mismatch: string | null;
+  /** W-4: a witnessed entry claims a time after the witness recorded it. */
+  timeline_violation: string | null;
   /** Verdict of the worst source (the only one, outside directory mode). */
   record: WitnessedHeadRecord | null;
   consistency: ConsistencyStatus | null;
@@ -136,6 +138,31 @@ function verdictLine(result: WitnessSourceResult, tree: TreeHead, prefix: string
   }
 }
 
+/** Clock skew tolerated between the door and the witness host. */
+export const WITNESS_CLOCK_SKEW_MS = 5 * 60 * 1000;
+
+/**
+ * W-4: every entry a witnessed head covers existed when the witness recorded
+ * it, so none may claim a later `ts`. With the verifier's non-decreasing
+ * timeline, checking the newest covered entry bounds them all. Only the
+ * latest head is witness-SIGNED, so that is the one checked — a bound, not
+ * a proof of when each entry was first seen.
+ */
+function timelineViolation(
+  record: WitnessedHeadRecord,
+  entries: readonly LedgerEntryV1[]
+): string | null {
+  const newest = entries[record.head.size - 1];
+  if (newest === undefined) return null;
+  const claimed = Date.parse(newest.ts);
+  const witnessedAt = Date.parse(record.witnessed_at);
+  if (claimed <= witnessedAt + WITNESS_CLOCK_SKEW_MS) return null;
+  return (
+    `entry seq ${newest.seq} claims ts ${newest.ts}, after the witness recorded it at ` +
+    `${record.witnessed_at} (+${WITNESS_CLOCK_SKEW_MS / 60_000} min skew)`
+  );
+}
+
 /**
  * The witnessed head is the recorded --prev-head nobody on this machine can
  * rewrite: fetched over the network, signature-verified against the
@@ -146,9 +173,10 @@ function verdictLine(result: WitnessSourceResult, tree: TreeHead, prefix: string
 export async function checkWitness(
   witness: { url: string; publicKeyHex: string },
   binding: WitnessBinding,
-  entryHashes: string[],
+  entries: readonly LedgerEntryV1[],
   tree: TreeHead
 ): Promise<WitnessCheck> {
+  const entryHashes = entries.map((entry) => entry.entry_hash);
   const lines: string[] = [];
   const primary = binding.sourceIds[0] as string;
   const json: WitnessJson = {
@@ -156,6 +184,7 @@ export async function checkWitness(
     mode: binding.mode,
     source_id: primary,
     source_mismatch: binding.mismatch,
+    timeline_violation: null,
     record: null,
     consistency: null,
     sources: [],
@@ -192,6 +221,14 @@ export async function checkWitness(
     lines.push(`witness:  source ${result.source_id.slice(0, 12)}… (${MODE_LABEL[binding.mode]})`);
     lines.push(verdictLine(result, tree, multi ? `[${result.source_id.slice(0, 12)}…] ` : ''));
   }
+  for (const result of json.sources) {
+    const violation =
+      result.record !== null && severity(result) === 0 ? timelineViolation(result.record, entries) : null;
+    if (violation !== null && json.timeline_violation === null) {
+      json.timeline_violation = violation;
+      lines.push(`witness:  TIMELINE VIOLATION — ${violation}`);
+    }
+  }
   const worst = json.sources.reduce((a, b) => (severity(b) > severity(a) ? b : a));
   json.record = worst.record;
   json.consistency = worst.consistency;
@@ -201,6 +238,7 @@ export async function checkWitness(
   // least one bound source was witnessed, and that none contradicts us.
   const contradicted = json.sources.some((result) => severity(result) > 1);
   const witnessedAny = json.sources.some((result) => result.record !== null);
-  const failed = binding.mismatch !== null || contradicted || !witnessedAny;
+  const failed =
+    binding.mismatch !== null || contradicted || !witnessedAny || json.timeline_violation !== null;
   return { lines, json, failed, unavailable: false };
 }

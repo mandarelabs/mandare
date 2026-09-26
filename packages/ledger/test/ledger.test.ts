@@ -1,6 +1,6 @@
 import { statSync } from 'node:fs';
 
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import { GENESIS_PREV_HASH, SchemaValidationError, isLedgerEntry } from '@mandarelabs/spec';
 import { verifyChain } from '@mandarelabs/verifier';
@@ -115,5 +115,29 @@ describe('readLedger', () => {
 
   test('throws a clear error on a non-ledger file', () => {
     expect(() => readLedger('/dev/null')).toThrow();
+  });
+});
+
+describe('W-4: the door never writes a timeline regression', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  test('a wall clock stepping BACK clamps the next ts to the previous one; the chain verifies', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const dbPath = tempDbPath();
+    const ledger = Ledger.open(dbPath, { doorId: 'gateway:test' });
+    vi.setSystemTime(new Date('2026-09-26T12:00:10.000Z'));
+    const first = ledger.append(sampleInput());
+    vi.setSystemTime(new Date('2026-09-26T12:00:02.000Z')); // NTP step back 8 s
+    const second = ledger.append(sampleInput());
+    vi.setSystemTime(new Date('2026-09-26T12:00:11.000Z'));
+    const third = ledger.append(sampleInput());
+    ledger.close();
+
+    expect(second.ts).toBe(first.ts);
+    expect(third.ts).toBe('2026-09-26T12:00:11.000Z');
+    const { meta, entries } = readLedger(dbPath);
+    expect((await verifyChain(entries, { doorPublicKey: meta.door_public_key })).ok).toBe(true);
   });
 });

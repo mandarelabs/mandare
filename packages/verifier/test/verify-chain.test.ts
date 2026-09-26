@@ -193,6 +193,37 @@ describe('verifyChain — tampered chains fail loudly', () => {
     if (!result.ok) expect(result.failure.code).toBe('SIGNATURE_INVALID');
   });
 
+  test('W-4: ts earlier than the previous entry → TS_REGRESSION (backdating after later history)', async () => {
+    const first = await makeEntry(1, GENESIS_PREV_HASH, (p) => ({ ...p, ts: '2026-07-21T12:00:05.000Z' }));
+    const second = await makeEntry(2, first.entry_hash, (p) => ({ ...p, ts: '2026-07-21T12:00:04.999Z' }));
+    const result = await verifyChain([first, second], { doorPublicKey: publicKeyHex });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.code).toBe('TS_REGRESSION');
+      expect(result.failure.seq).toBe(2);
+    }
+  });
+
+  test('W-4: equal timestamps are fine (a clamped writer may repeat the previous ts)', async () => {
+    const chain = await makeChain(3); // all share one ts
+    expect((await verifyChain(chain, { doorPublicKey: publicKeyHex })).ok).toBe(true);
+  });
+
+  test('W-4: a ts that is not a real instant (2026-13-01) fails closed as TS_REGRESSION', async () => {
+    const first = await makeEntry(1, GENESIS_PREV_HASH, (p) => ({ ...p, ts: '2026-13-01T00:00:00Z' }));
+    const result = await verifyChain([first], { doorPublicKey: publicKeyHex });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.failure.code).toBe('TS_REGRESSION');
+  });
+
+  test('I-4: a schema-valid but undecodable signature → SIGNATURE_INVALID, never a throw', async () => {
+    const [entry] = await makeChain(1);
+    const oneChar = { ...entry!, door_signature: { ...entry!.door_signature, value: 'A' } };
+    const result = await verifyChain([oneChar], { doorPublicKey: publicKeyHex });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.failure.code).toBe('SIGNATURE_INVALID');
+  });
+
   test('garbage rows → SCHEMA_INVALID', async () => {
     const result = await verifyChain([{ hello: 'world' }], { doorPublicKey: publicKeyHex });
     expect(result.ok).toBe(false);

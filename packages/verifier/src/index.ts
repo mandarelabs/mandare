@@ -43,7 +43,8 @@ export {
  * including parties who distrust Mandare, can verify a ledger.
  *
  * What it proves (S0 tier): schema validity, seq continuity, prev-hash
- * linkage, entry-hash correctness, and door signatures. What it CANNOT prove
+ * linkage, entry-hash correctness, door signatures, and a non-decreasing
+ * timeline (W-4). What it CANNOT prove
  * locally: tail truncation and rollback to an older copy — that is what
  * external witnessing exists for (SPEC §6 locks 4–5, lands in S6).
  */
@@ -60,7 +61,9 @@ export type VerifyFailureCode =
   | 'KEY_EXPIRED'
   | 'SIGNATURE_INVALID'
   /** A stored row has more than one reading, or its columns disagree with it (W-3). */
-  | 'STORAGE_MISMATCH';
+  | 'STORAGE_MISMATCH'
+  /** A signed entry claims a time before its predecessor, or no real instant (W-4). */
+  | 'TS_REGRESSION';
 
 export interface VerifyFailure {
   code: VerifyFailureCode;
@@ -234,14 +237,27 @@ export async function verifyChain(
       return fail(failureInfo.code, index, entry.seq, failureInfo.reason);
     }
 
-    const signatureValid = await globalThis.crypto.subtle.verify(
-      'Ed25519',
-      resolution.key,
-      base64UrlToBytes(door_signature.value) as Uint8Array<ArrayBuffer>,
-      hexToBytes(entry_hash) as Uint8Array<ArrayBuffer>
-    );
+    const signatureBytes = decodeSignature(door_signature.value);
+    const signatureValid =
+      signatureBytes !== null &&
+      (await globalThis.crypto.subtle.verify(
+        'Ed25519',
+        resolution.key,
+        signatureBytes as Uint8Array<ArrayBuffer>,
+        hexToBytes(entry_hash) as Uint8Array<ArrayBuffer>
+      ));
     if (!signatureValid) {
-      return fail('SIGNATURE_INVALID', index, entry.seq, 'door signature does not verify');
+      return fail(
+        'SIGNATURE_INVALID',
+        index,
+        entry.seq,
+        signatureBytes === null ? 'door signature is not decodable base64url' : 'door signature does not verify'
+      );
+    }
+
+    const timelineFailure = checkTimeline(entry, previous, index);
+    if (timelineFailure) {
+      return { ok: false, entries: entries.length, failure: timelineFailure };
     }
 
     previous = entry;
@@ -257,6 +273,44 @@ export async function verifyChain(
   }
 
   return { ok: true, entries: entries.length, headHash: previous?.entry_hash ?? null };
+}
+
+/** base64url → bytes, or null for input that is schema-valid but undecodable (I-4). */
+function decodeSignature(value: string): Uint8Array | null {
+  try {
+    return base64UrlToBytes(value);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Timeline rule (W-4): an authentically signed entry may not claim a time
+ * before its predecessor. Doors clamp `ts` to the previous entry's, so an
+ * honest chain never regresses; what does is a key holder writing BEHIND
+ * later history — e.g. a stolen rotated-out key appending after the new
+ * key's entries, `ts` backdated into its own validity window so the
+ * key-window check alone would pass. Fail closed on a `ts` that is not a
+ * real instant (the schema regex admits 2026-13-01), as the window check does.
+ */
+function checkTimeline(
+  entry: LedgerEntryV1,
+  previous: LedgerEntryV1 | null,
+  index: number
+): VerifyFailure | null {
+  const at = Date.parse(entry.ts);
+  if (!Number.isFinite(at)) {
+    return failure('TS_REGRESSION', index, entry.seq, `entry ts ${entry.ts} is not a parseable instant`);
+  }
+  if (previous !== null && at < Date.parse(previous.ts)) {
+    return failure(
+      'TS_REGRESSION',
+      index,
+      entry.seq,
+      `entry ts ${entry.ts} is before seq ${previous.seq}'s ${previous.ts} — written behind later history`
+    );
+  }
+  return null;
 }
 
 function checkLink(

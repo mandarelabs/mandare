@@ -2,7 +2,7 @@ import pg from 'pg';
 
 import { canonicalJson, type LedgerEntryV1 } from '@mandarelabs/spec';
 
-import type { LedgerHead } from './entry.js';
+import { headFromRow, type LedgerHead } from './entry.js';
 import type { SpendCounter } from './projection.js';
 import {
   runProjectedAppend,
@@ -480,9 +480,9 @@ async function headWithClient(
 ): Promise<LedgerHead | null> {
   // seq is BIGINT; cast to int so pg returns a number, not a string. The
   // 2^31 ceiling matches the verifier's tree-size bound.
-  const result = await queryable.query<{ seq: number; entry_hash: string }>(
-    'SELECT seq::int AS seq, entry_hash FROM ledger_entries ORDER BY seq DESC LIMIT 1'
+  const result = await queryable.query<{ seq: number; entry_hash: string; entry_json: string }>(
+    'SELECT seq::int AS seq, entry_hash, entry_json FROM ledger_entries ORDER BY seq DESC LIMIT 1'
   );
   const row = result.rows[0];
-  return row === undefined ? null : { seq: row.seq, entry_hash: row.entry_hash };
+  return row === undefined ? null : headFromRow(row);
 }

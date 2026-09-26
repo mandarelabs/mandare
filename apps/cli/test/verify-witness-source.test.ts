@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'vitest';
 
-import { loadOrCreateDoorKey, readLedger } from '@mandarelabs/ledger';
+import { Ledger, loadOrCreateDoorKey, readLedger } from '@mandarelabs/ledger';
 
 import { runVerify, type VerifyOptions } from '../src/verify.js';
 import {
@@ -160,5 +160,33 @@ describe('W-1: verify --witness binds the witnessed source to the verifying key'
 
     const bound = await runVerify(dbPath, { doorPublicKey: doorKey.publicKeyHex, witness: witnessOption() });
     expect(bound.exitCode).toBe(1);
+  });
+});
+
+describe('W-4: a witnessed entry cannot claim a time after it was witnessed', () => {
+  test('forward-dated entries (ts a day past the witness record) → exit 1, TIMELINE VIOLATION', async () => {
+    witness = await startWitness();
+    const dbPath = tmp('ledger.db');
+    const ledger = Ledger.open(dbPath, { doorId: 'gateway:test' });
+    for (let i = 0; i < 3; i += 1) {
+      ledger.append({
+        actor: 'did:example:agent',
+        mandate_id: 'mnd_test',
+        action: { type: 'llm.call.intent', target: 't', request_hash: 'e'.repeat(64) },
+        cost: { amount: 1, currency: 'EUR', tokens_in: 0, tokens_out: 0 },
+      });
+    }
+    const doorKey = ledger.signer();
+    ledger.close();
+    const tomorrow = new Date(Date.now() + 86_400_000).toISOString();
+    rewriteAndResign(dbPath, doorKey, (entries) =>
+      entries.map((entry, i) => (i === 2 ? { ...entry, ts: tomorrow } : entry))
+    );
+    await witnessCurrentTree(witness, dbPath, doorKey); // witnessed NOW
+
+    const output = await runVerify(dbPath, { doorPublicKey: doorKey.publicKeyHex, witness: witnessOption() });
+    expect(output.exitCode).toBe(1);
+    expect(output.lines.join('\n')).toContain('TIMELINE VIOLATION');
+    expect(output.json.witness?.timeline_violation).toMatch(/seq 3/);
   });
 });

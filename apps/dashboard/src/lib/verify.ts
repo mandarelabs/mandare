@@ -69,6 +69,8 @@ export interface VerifyJson {
     consistency: { status?: string; reason?: string } | null;
     /** W-1: the file's declared source disagrees with the verifying key. */
     source_mismatch?: string | null;
+    /** W-4: a witnessed entry claims a time after it was witnessed. */
+    timeline_violation?: string | null;
   };
 }
 
@@ -85,6 +87,10 @@ export function witnessVerdict(
   const mismatch = witness?.source_mismatch;
   if (typeof mismatch === 'string' && mismatch !== '') {
     return { consistent: false, detail: `source mismatch: ${mismatch}` };
+  }
+  const timeline = witness?.timeline_violation;
+  if (typeof timeline === 'string' && timeline !== '') {
+    return { consistent: false, detail: `timeline violation: ${timeline}` };
   }
   const status = witness?.consistency?.status;
   if (status === 'extended' || status === 'identical') {

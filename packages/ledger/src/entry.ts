@@ -33,6 +33,34 @@ export interface AppendInput {
 export interface LedgerHead {
   seq: number;
   entry_hash: string;
+  /** The head entry's `ts` — the next entry never claims an earlier one (W-4). */
+  ts?: string;
+}
+
+/** A head from its stored row (the ts is read from the stored entry text). */
+export function headFromRow(row: { seq: number; entry_hash: string; entry_json: string }): LedgerHead {
+  let ts: unknown;
+  try {
+    ts = (JSON.parse(row.entry_json) as { ts?: unknown }).ts;
+  } catch {
+    ts = undefined;
+  }
+  return typeof ts === 'string'
+    ? { seq: row.seq, entry_hash: row.entry_hash, ts }
+    : { seq: row.seq, entry_hash: row.entry_hash };
+}
+
+/**
+ * The next entry's timestamp: now, clamped to the previous entry's (W-4).
+ * A wall clock can step back (NTP, VM resume); the chain's timeline may
+ * not — the verifier fails any regression as TS_REGRESSION, which is what
+ * convicts a key holder writing behind later history.
+ */
+function nextTs(previous: string | undefined): string {
+  const now = new Date().toISOString();
+  if (previous === undefined) return now;
+  const prev = Date.parse(previous);
+  return Number.isFinite(prev) && prev > Date.parse(now) ? previous : now;
 }
 
 const SALT_BYTES = 16;
@@ -48,7 +76,7 @@ export function buildEntry(
     schema_version: 1,
     seq: head === null ? 1 : head.seq + 1,
     ...(input.hw_counter === undefined ? {} : { hw_counter: input.hw_counter }),
-    ts: new Date().toISOString(),
+    ts: nextTs(head?.ts),
     door_id: doorId,
     actor: input.actor,
     mandate_id: input.mandate_id,

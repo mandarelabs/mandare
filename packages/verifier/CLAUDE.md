@@ -14,9 +14,14 @@ ledger — including parties who distrust us.** That drives every constraint:
 
 `SCHEMA_INVALID · SEQ_START · SEQ_GAP · GENESIS_MISMATCH · PREV_HASH_MISMATCH
 · ENTRY_HASH_MISMATCH · KEY_MISMATCH · KEY_UNKNOWN · KEY_EXPIRED
-· SIGNATURE_INVALID` — first failure wins, with seq + index + human reason.
-Red-team tests assert on these codes; renaming one is a breaking change.
-`KEY_UNKNOWN`/`KEY_EXPIRED` only occur in key-directory mode.
+· SIGNATURE_INVALID · TS_REGRESSION · STORAGE_MISMATCH` — first failure wins,
+with seq + index + human reason. Red-team tests assert on these codes;
+renaming one is a breaking change. `KEY_UNKNOWN`/`KEY_EXPIRED` only occur in
+key-directory mode. `TS_REGRESSION` (W-4) = a validly signed entry dated
+before its predecessor (or not a real instant); it is checked after the
+signature. `STORAGE_MISMATCH` (W-3) comes only from `parseStoredEntries`, the
+stored-row check readers run over raw rows before `verifyChain`. An
+undecodable signature is `SIGNATURE_INVALID`, never a throw (I-4).
 
 ## Honest scope (do not oversell in docs)
 

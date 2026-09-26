@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { canonicalJson, type LedgerEntryV1 } from '@mandarelabs/spec';
 
 import { loadOrCreateDoorKey, type DoorKey } from './door-key.js';
-import { buildEntry, type AppendInput, type LedgerHead } from './entry.js';
+import { buildEntry, headFromRow, type AppendInput, type LedgerHead } from './entry.js';
 import { openSqliteDatabase, readStoredRowsSync } from './sqlite-store.js';
 import { assertDoorOwnsMeta, metaFromRows, newMetaRows, type LedgerMeta, type StoredRow } from './store.js';
 
@@ -76,9 +76,9 @@ export class Ledger {
 
   head(): LedgerHead | null {
     const row = this.db
-      .prepare('SELECT seq, entry_hash FROM ledger_entries ORDER BY seq DESC LIMIT 1')
-      .get() as { seq: number; entry_hash: string } | undefined;
-    return row === undefined ? null : { seq: row.seq, entry_hash: row.entry_hash };
+      .prepare('SELECT seq, entry_hash, entry_json FROM ledger_entries ORDER BY seq DESC LIMIT 1')
+      .get() as { seq: number; entry_hash: string; entry_json: string } | undefined;
+    return row === undefined ? null : headFromRow(row);
   }
 
   /** Entry hashes in seq order — the witness client's content-free read path (S6). */

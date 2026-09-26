@@ -57,6 +57,16 @@ describe('witnessVerdict', () => {
     expect(verdict.detail).toContain('source mismatch');
   });
 
+  it('W-4: a timeline violation is RED even when the history extends', () => {
+    const verdict = witnessVerdict({
+      record: HEAD,
+      consistency: { status: 'extended' },
+      timeline_violation: 'entry seq 3 claims ts …, after the witness recorded it',
+    });
+    expect(verdict.consistent).toBe(false);
+    expect(verdict.detail).toContain('timeline violation');
+  });
+
   it('unknown future statuses fail closed', () => {
     expect(witnessVerdict({ record: HEAD, consistency: { status: '???' } }).consistent).toBe(false);
   });

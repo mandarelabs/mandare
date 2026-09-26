@@ -188,7 +188,7 @@ export async function runVerify(
 
   if (options.witness !== undefined) {
     const binding = await bindWitnessSources(meta, entries as LedgerEntryV1[], options, directory);
-    const witnessed = await checkWitness(options.witness, binding, entryHashes, tree);
+    const witnessed = await checkWitness(options.witness, binding, entries as LedgerEntryV1[], tree);
     lines.push(...witnessed.lines);
     json.witness = witnessed.json;
     if (witnessed.failed) {
