@@ -18,6 +18,7 @@ import {
 import { AsyncLedger } from '../../src/async-ledger.js';
 import { PgStore, provisionPgLedger } from '../../src/pg-store.js';
 import type { AppendInput } from '../../src/entry.js';
+import { forgedHashSql } from '../helpers.js';
 
 /**
  * RED-TEAM SUITE, Postgres team-mode driver (rule R5, BUILD-DECISIONS Q7).
@@ -315,7 +316,7 @@ describe('tampering past storage enforcement still fails verification', () => {
     await withTriggersDropped(async (client) => {
       await client.query(`
         INSERT INTO ledger_entries (seq, entry_hash, prev_hash, entry_json)
-        SELECT 5, 'aa' || substr(entry_hash, 3), entry_hash, entry_json
+        SELECT 5, ${forgedHashSql('aa', 'bb')}, entry_hash, entry_json
         FROM ledger_entries WHERE seq = 2
       `);
 

@@ -27,7 +27,7 @@ import {
 
 import { loadOrCreateDoorKey, type DoorKey } from '../../src/door-key.js';
 import { Ledger, readLedger, readLedgerRows } from '../../src/ledger.js';
-import { buildChainDb, sampleInput } from '../helpers.js';
+import { buildChainDb, forgedHashSql, sampleInput } from '../helpers.js';
 
 /**
  * RED-TEAM SUITE (rule R5) — permanent CI tests. Every tamper technique an
@@ -209,7 +209,7 @@ describe('tampering past storage enforcement still fails verification', () => {
     // Attacker forges a plausible-looking future entry at seq 4 (seq 3 missing).
     db.exec(`
       INSERT INTO ledger_entries (seq, entry_hash, prev_hash, entry_json)
-      SELECT 4, 'deadbeef' || substr(entry_hash, 9), entry_hash, entry_json
+      SELECT 4, ${forgedHashSql('deadbeef', 'feedface')}, entry_hash, entry_json
       FROM ledger_entries WHERE seq = 2;
     `);
     db.close();
@@ -225,7 +225,7 @@ describe('tampering past storage enforcement still fails verification', () => {
     // Replay entry 2's json at seq 3 (classic double-spend replay).
     db.exec(`
       INSERT INTO ledger_entries (seq, entry_hash, prev_hash, entry_json)
-      SELECT 3, 'aa' || substr(entry_hash, 3), entry_hash, entry_json
+      SELECT 3, ${forgedHashSql('aa', 'bb')}, entry_hash, entry_json
       FROM ledger_entries WHERE seq = 2;
     `);
     db.close();

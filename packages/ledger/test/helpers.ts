@@ -31,3 +31,22 @@ export function buildChainDb(length: number): { dbPath: string; publicKeyHex: st
   ledger.close();
   return { dbPath, publicKeyHex };
 }
+
+/**
+ * SQL expression (SQLite + Postgres) for a forged `entry_hash`: the source
+ * row's hash with its first `prefix.length` hex chars replaced by `prefix` —
+ * or by `fallback` when the real hash already starts with `prefix`, so the
+ * forgery is GUARANTEED to differ from the hash it was built from. A bare
+ * `'aa' || substr(entry_hash, 3)` reproduces the original hash 1 time in 256
+ * (hashes are random per run), and the W-3 no-collision trigger then refuses
+ * the insert before the tamper ever reaches verification (CI flake,
+ * 2026-09-27). The attack under test is unchanged: a new row, new hash.
+ */
+export function forgedHashSql(prefix: string, fallback: string): string {
+  const hex = /^[0-9a-f]+$/;
+  if (!hex.test(prefix) || !hex.test(fallback) || prefix.length !== fallback.length || prefix === fallback) {
+    throw new Error('forgedHashSql: prefix and fallback must be distinct hex strings of equal length');
+  }
+  const rest = prefix.length + 1;
+  return `(CASE WHEN substr(entry_hash, 1, ${prefix.length}) = '${prefix}' THEN '${fallback}' ELSE '${prefix}' END || substr(entry_hash, ${rest}))`;
+}
