@@ -4,7 +4,7 @@
 
 [owner]  ONE €20 mandate signed — rails: gateway (LLM) AND card. One cap.
 
-[door]   one door process at http://127.0.0.1:52891 — LLM proxy AND card rail, one ledger.
+[door]   one door process at http://127.0.0.1:63047 — LLM proxy AND card rail, one ledger.
 
 [agent]  virtual card issued: ic_demo_1 (…4242) — allowed because the mandate grants card.create.
 
@@ -23,8 +23,8 @@
 $ mandare kill did:mandare:demo-agent
   KILLED did:mandare:demo-agent
     subject:      agent:did:mandare:demo-agent
-    ledger entry: 69c493e933c1045227102e306daf455c7a4b61fcc2965ee8d4ecb717ce40b190 (seq 19)
-    door key:     c3a2db85fdb7… (provenance: software)
+    ledger entry: 0ece09a2bb74189c7826bfa378e074ee4396cf784807e0ce545350184d4752e7 (seq 19)
+    door key:     03ecac325a0c… (provenance: software)
     vault:        legacy mode (no scoped tokens)
     reason:       demo: task over (committed in the entry's request_hash)
     card killed:  ic_demo_1 (entry seq 20)
@@ -33,34 +33,34 @@ $ mandare kill did:mandare:demo-agent
 [card]   €0.50 post-kill     → issuing_authorization.request → DECLINED (agent + card revoked)
 
 $ mandare verify --db ledger.db --spend
-ledger:   /var/folders/wv/dslzb2wx45qdqzl4dmhhg78m0000gn/T/mandare-card-demo-OheF7k/ledger.db
-door:     gateway:local (key c3a2db85fdb7…)
+ledger:   /var/folders/wv/dslzb2wx45qdqzl4dmhhg78m0000gn/T/mandare-card-demo-1J6q3G/ledger.db
+door:     gateway:local (key 03ecac325a0c…)
 entries:  21
-head:     5014f395dfa9d8e7dd2d4abda0eeb919de8dd969649d689bdeb908c973fd7389
-tree:     size=21 root=3aebc739dcac24474581c29f12ba0e7c0f140802de2e34e8228f163b8771528d
+head:     68c197cc93e099f87d092d2c8267a6336b863abde91f4aa6f147bd57ee4916d2
+tree:     size=21 root=3efa65f80b597b3514b329ef1f252fab620609b0b2d11ef2584d104ad7af0f6e
 chain:    VALID — every entry hash-linked and door-signed
 anchor:   SELF-ANCHORED — door key taken from the ledger file itself; pass --door-key <hex> or --key-directory <path|url> from an independent source to verify authorship
 note:     record the tree head (size:root) after each verify — a later --prev-head check makes rollback and rewrites detectable; witnessing (S6) automates this off-machine.
 spend:
-  mnd_dev_358867798869: settled 19.20 EUR · open reservations 0.00 EUR · 7 call(s) · 2 refused
+  mnd_dev_c31077f1caa2: settled 19.20 EUR · open reservations 0.00 EUR · 7 call(s) · 2 refused
   rails:    llm settled 15.00 EUR (0 refused) · card settled 4.20 EUR (2 declined) · one cap governs both
 trail:    (last 12 of 21 entries)
-  #10  2026-07-22T15:09:30.878Z  INTENT   reserve 0.002013 EUR
-  #11  2026-07-22T15:09:30.879Z  RESULT   settle  2.50 EUR
-  #12  2026-07-22T15:09:30.881Z  INTENT   reserve 0.002013 EUR
-  #13  2026-07-22T15:09:30.882Z  RESULT   settle  2.50 EUR
-  #14  2026-07-22T15:09:30.884Z  INTENT   reserve 0.002013 EUR
-  #15  2026-07-22T15:09:30.885Z  RESULT   settle  2.50 EUR
-  #16  2026-07-22T15:09:30.887Z  CARD     reserve 4.20 EUR  (network authorization)
-  #17  2026-07-22T15:09:30.887Z  CARD     settle  4.20 EUR  ← authorization APPROVED
-  #18  2026-07-22T15:09:30.889Z  CARD     refused 3.00 EUR  ← DECLINED at the network
-  #19  2026-07-22T15:09:30.996Z  agent.revoke
-  #20  2026-07-22T15:09:30.999Z  agent.revoke
-  #21  2026-07-22T15:09:31.135Z  CARD     refused 0.50 EUR  ← DECLINED at the network
+  #10  2026-09-27T05:32:12.791Z  INTENT   reserve 2.626173 EUR
+  #11  2026-09-27T05:32:12.793Z  RESULT   settle  2.50 EUR
+  #12  2026-09-27T05:32:12.795Z  INTENT   reserve 2.626173 EUR
+  #13  2026-09-27T05:32:12.797Z  RESULT   settle  2.50 EUR
+  #14  2026-09-27T05:32:12.798Z  INTENT   reserve 2.626173 EUR
+  #15  2026-09-27T05:32:12.800Z  RESULT   settle  2.50 EUR
+  #16  2026-09-27T05:32:12.803Z  CARD     reserve 4.20 EUR  (network authorization)
+  #17  2026-09-27T05:32:12.804Z  CARD     settle  4.20 EUR  ← authorization APPROVED
+  #18  2026-09-27T05:32:12.805Z  CARD     refused 3.00 EUR  ← DECLINED at the network
+  #19  2026-09-27T05:32:12.957Z  agent.revoke
+  #20  2026-09-27T05:32:12.960Z  agent.revoke
+  #21  2026-09-27T05:32:14.482Z  CARD     refused 0.50 EUR  ← DECLINED at the network
 counters: CONSISTENT — 11 counter row(s) equal a fresh replay of the ledger (counters are a projection, never a second truth)
 subjects:
-  REVOKED    card:ic_demo_1  (index 0, @ 2026-07-22T15:09:30.999Z, entry 7f62767fa82b…)
-  REVOKED    agent:did:mandare:demo-agent  (index 1, @ 2026-07-22T15:09:30.996Z, entry 69c493e933c1…)
+  REVOKED    card:ic_demo_1  (index 0, @ 2026-09-27T05:32:12.960Z, entry 912909db05db…)
+  REVOKED    agent:did:mandare:demo-agent  (index 1, @ 2026-09-27T05:32:12.957Z, entry 0ece09a2bb74…)
 status:   IETF Token Status List — id=agents bits=1 lst=eNpjBgAABAAE (S6 publishes this unchanged)
 revocations: CONSISTENT — 2 record(s) equal a fresh replay of the ledger
 

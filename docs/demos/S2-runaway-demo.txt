@@ -2,8 +2,10 @@
  MANDARE DEMO — a runaway agent loop dies at €20
 ════════════════════════════════════════════════════════════════════
 
+mandate mnd_dev_d9c14527fd81 → /var/folders/wv/dslzb2wx45qdqzl4dmhhg78m0000gn/T/mandare-demo-XSGwKL/mandate.json
+  agent=did:mandare:dev-agent caps: tx 5 / day 20 / total 100 EUR
 [demo] mandate signed: €5/call · €20/day · €100 total — the human signs ONCE.
-[demo] gateway door up at http://127.0.0.1:63632 (ledger: /var/folders/wv/dslzb2wx45qdqzl4dmhhg78m0000gn/T/mandare-demo-4AYooH/ledger.db)
+[demo] gateway door up at http://127.0.0.1:63000 (ledger: /var/folders/wv/dslzb2wx45qdqzl4dmhhg78m0000gn/T/mandare-demo-XSGwKL/ledger.db)
 
 [demo] releasing the runaway loop — it will NOT stop on its own…
 
@@ -20,35 +22,35 @@
 
   call # 72  403 DENIED — THE LOOP DIES HERE
     code:   PER_DAY_EXCEEDED
-    reason: per-day budget exceeded: reserved 0.00 EUR + settled 19.723587 EUR + estimate 0.277803 EUR > cap 20.00 EUR
-    the refusal itself is ledger entry 92938e3617eb03c8…
+    reason: per-day budget exceeded: reserved 0.00 EUR + settled 19.723587 EUR + estimate 0.278853 EUR > cap 20.00 EUR
+    the refusal itself is ledger entry 59034994bfacad09…
 
 [demo] runaway made 71 calls in 0.1s before the mandate killed it.
 
 $ mandare verify --db ledger.db --spend
-ledger:   /var/folders/wv/dslzb2wx45qdqzl4dmhhg78m0000gn/T/mandare-demo-4AYooH/ledger.db
-door:     gateway:local (key 46d58378d0b6…)
+ledger:   /var/folders/wv/dslzb2wx45qdqzl4dmhhg78m0000gn/T/mandare-demo-XSGwKL/ledger.db
+door:     gateway:local (key f2db22135f44…)
 entries:  143
-head:     92938e3617eb03c860a8c1f62a78d612d43fee6b15a2777979c0720aca2ce825
-tree:     size=143 root=77014fc7fd8b70f0c785abb2e37179225f7de8b22f99187495770cad6a881a66
+head:     59034994bfacad0935e0197fae7b74f9f6e6059e35fa8f51c2855631d0eae389
+tree:     size=143 root=e505a926d789fc763d8d2e1388a245047a16d39856593a94069c11bc2dd68cbc
 chain:    VALID — every entry hash-linked and door-signed
 anchor:   SELF-ANCHORED — door key taken from the ledger file itself; pass --door-key <hex> or --key-directory <path|url> from an independent source to verify authorship
 note:     record the tree head (size:root) after each verify — a later --prev-head check makes rollback and rewrites detectable; witnessing (S6) automates this off-machine.
 spend:
-  mnd_dev_0c74fdc00ce5: settled 19.723587 EUR · open reservations 0.00 EUR · 71 call(s) · 1 refused
+  mnd_dev_d9c14527fd81: settled 19.723587 EUR · open reservations 0.00 EUR · 71 call(s) · 1 refused
 trail:    (last 12 of 143 entries)
-  #132  2026-07-21T15:56:48.485Z  RESULT   settle  0.277797 EUR
-  #133  2026-07-21T15:56:48.485Z  INTENT   reserve 0.277803 EUR
-  #134  2026-07-21T15:56:48.486Z  RESULT   settle  0.277797 EUR
-  #135  2026-07-21T15:56:48.486Z  INTENT   reserve 0.277803 EUR
-  #136  2026-07-21T15:56:48.487Z  RESULT   settle  0.277797 EUR
-  #137  2026-07-21T15:56:48.487Z  INTENT   reserve 0.277803 EUR
-  #138  2026-07-21T15:56:48.488Z  RESULT   settle  0.277797 EUR
-  #139  2026-07-21T15:56:48.489Z  INTENT   reserve 0.277803 EUR
-  #140  2026-07-21T15:56:48.489Z  RESULT   settle  0.277797 EUR
-  #141  2026-07-21T15:56:48.491Z  INTENT   reserve 0.277803 EUR
-  #142  2026-07-21T15:56:48.491Z  RESULT   settle  0.277797 EUR
-  #143  2026-07-21T15:56:48.492Z  DENIED   refused 0.277803 EUR  ← reservation REFUSED by policy
+  #132  2026-09-27T05:31:54.670Z  RESULT   settle  0.277797 EUR
+  #133  2026-09-27T05:31:54.671Z  INTENT   reserve 0.278853 EUR
+  #134  2026-09-27T05:31:54.671Z  RESULT   settle  0.277797 EUR
+  #135  2026-09-27T05:31:54.672Z  INTENT   reserve 0.278853 EUR
+  #136  2026-09-27T05:31:54.672Z  RESULT   settle  0.277797 EUR
+  #137  2026-09-27T05:31:54.673Z  INTENT   reserve 0.278853 EUR
+  #138  2026-09-27T05:31:54.674Z  RESULT   settle  0.277797 EUR
+  #139  2026-09-27T05:31:54.674Z  INTENT   reserve 0.278853 EUR
+  #140  2026-09-27T05:31:54.675Z  RESULT   settle  0.277797 EUR
+  #141  2026-09-27T05:31:54.675Z  INTENT   reserve 0.278853 EUR
+  #142  2026-09-27T05:31:54.676Z  RESULT   settle  0.277797 EUR
+  #143  2026-09-27T05:31:54.677Z  DENIED   refused 0.278853 EUR  ← reservation REFUSED by policy
 counters: CONSISTENT — 74 counter row(s) equal a fresh replay of the ledger (counters are a projection, never a second truth)
 
 ════════════════════════════════════════════════════════════════════
