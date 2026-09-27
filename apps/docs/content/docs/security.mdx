@@ -32,8 +32,10 @@ done fully:
   attestations, verifiable with `gh attestation verify`.
 - The OpenClaw skill ships a `clawhub.skill.verify.v1` envelope — sha256 of
   every file, Ed25519-signed on tagged releases — with a bundled verifier
-  script (`scripts/verify-openclaw-skill.mjs`). ClawHub has no publisher
-  signing chain yet; we ship one anyway.
+  script (`scripts/verify-openclaw-skill.mjs --expect-key <hex>`, the key
+  pinned from this page — published here with the first signed release — and
+  the GitHub release's `RELEASE-KEY.hex`). ClawHub
+  has no publisher signing chain yet; we ship one anyway.
 - `REPRODUCING.md` documents the honest reproducibility bar: pinned
   lockfile, provenance, independently rebuildable from a tagged commit — and
   explicitly does **not** claim bit-for-bit builds.

@@ -15,7 +15,10 @@ Rules here:
   `MANDARE_MCP_HOME`); `pop_secret`/private JWKs never enter model context.
   `redactSecrets` is the belt on top.
 - **Kill is always on; reinstate is opt-in** (`MANDARE_MCP_ALLOW_REINSTATE=1`)
-  — a compromised MCP host may close doors, not reopen them.
+  — a TOOL-SURFACE restriction only. The server runs with operator-level
+  door access (kill/issuance sign with the door key), so code running in its
+  environment can reinstate directly; never document it as a key boundary
+  (S10-fix K-1).
 - `server.json` is the MCP-registry manifest (namespace `com.mandarelabs`,
   DNS-verified against mandarelabs.com at launch). It is PREPARED but not
   published until S9 — the repo is private; publishing is a launch act.

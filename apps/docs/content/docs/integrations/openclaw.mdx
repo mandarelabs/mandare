@@ -10,7 +10,8 @@ format — the same directory also works as a Claude Code skill — with a
 
 ## What the agent learns
 
-**Visibility and the kill switch — never authority.**
+**Visibility and proofs. The kill switch requires operator-level door
+access** — see below.
 
 - Check remaining budget before expensive work
   (`mandare verify --spend`), and stop early when the mandate clearly
@@ -20,11 +21,25 @@ format — the same directory also works as a Claude Code skill — with a
   **never** route around a refusal, scavenge credentials, or retry-storm.
 - Produce proofs for the human: full verification, witness check, integrity
   certificates.
-- Kill spend on request (its own, or a subordinate agent's) — closing doors
-  is always allowed.
+- Kill spend on request (its own, or a subordinate agent's) — **only where
+  the environment can read the door's signing key** (see below).
 - Refuse to issue passports/mandates/tokens or reinstate anything: those are
   operator actions, and the skill explains why (an agent that can widen its
   own permissions has no permissions at all).
+
+### The kill switch is operator access
+
+`mandare kill` signs a ledger entry with the door's signing key (vault, or
+the `.doorkey.pem` beside the ledger). Any environment that can do that can
+also run `mandare reinstate` and sign other ledger entries — so an agent
+whose kill works holds operator-level door authority, and the "never
+reinstate" rule above is an instruction it follows, not a boundary it cannot
+cross. If the governed agent must not hold that authority, keep the door key
+out of its environment: budget checks, refusal handling, `verify` and
+`certify` need only the ledger file, and the kill stays with the human or a
+supervising process. A kill-only path (a key or endpoint verifiers accept
+for revocations alone, recording who invoked it) is planned before the skill
+is promoted on ClawHub.
 
 ## Install (pre-ClawHub)
 
@@ -43,11 +58,17 @@ The agent environment needs the `mandare` CLI on PATH (from
 
 Skill packages carry a `clawhub.skill.verify.v1` envelope — sha256 of every
 file, Ed25519-signed on tagged releases — plus `SHA256SUMS` in the GitHub
-release. Verify any downloaded copy:
+release. Verify any downloaded copy against the **pinned** release key,
+published at [mandare.dev/security](https://mandare.dev/security) and
+attached to each GitHub release as `RELEASE-KEY.hex`:
 
 ```bash
-node scripts/verify-openclaw-skill.mjs <skill-directory>
+node scripts/verify-openclaw-skill.mjs <skill-directory> --expect-key <release-key-hex>
 ```
+
+Without `--expect-key` a signed package fails on purpose — a valid signature
+under an unknown key proves nothing. `--allow-unsigned` exists for your own
+local builds only; it never overrides a pinned key.
 
 ClawHub scans uploads, but has no publisher signing chain — this envelope is
 deliberately ahead of the platform norm, and CI executes every command the

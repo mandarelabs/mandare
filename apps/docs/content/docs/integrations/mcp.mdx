@@ -50,9 +50,14 @@ After npm launch this becomes `npx @mandarelabs/mcp-server`. Vault settings
   argv — no shell.
 - **Secrets stay out of model context.** Token grants and private keys are
   written 0600 into `MANDARE_MCP_HOME` and referenced by path.
-- **Kill is always available; reinstate is opt-in**
-  (`MANDARE_MCP_ALLOW_REINSTATE=1`). A compromised MCP host may close doors,
-  not reopen them.
+- **The server holds operator-level door access.** Kill and the issuance
+  tools sign with the door key (and the vault), so give this server only to
+  an MCP host you would trust as an operator.
+- **Reinstate is not a tool unless you opt in**
+  (`MANDARE_MCP_ALLOW_REINSTATE=1`). That narrows what a model can do
+  *through the tool list*; it is not a key boundary — anything that can run
+  code with the server's environment holds the same door key and can
+  reinstate directly.
 
 The registry manifest (`server.json`, namespace `com.mandarelabs`) ships in
 the package; publication to the MCP registry happens at launch.

@@ -33,9 +33,11 @@ metadata:
 You are running behind a **Mandare door**: a local gateway that meters every
 LLM/API call against a human-signed mandate (budget caps, approval
 thresholds) and records everything in a tamper-evident ledger. This skill
-gives you **visibility and the kill switch — never authority**: you can read
-budgets, explain refusals, prove the trail, and close doors. You cannot mint
-permissions.
+gives you **visibility and proofs**: you can read budgets, explain refusals,
+and prove the trail. The **kill switch** section works only if the human gave
+your environment operator-level door access (see its note) — and that same
+access could reopen doors, so the rules below are yours to keep, not a lock
+that keeps you.
 
 Everything below uses the `mandare` CLI and the ledger at
 `$MANDARE_LEDGER_DB` (ask the human for the path if unset).
@@ -109,6 +111,13 @@ mandare kill "$AGENT_DID" --reason "human asked to stop"
 halts the whole door. The kill is local, offline, and fail-closed — the
 gateway refuses the subject on its next request.
 
+**Operator-level access.** `mandare kill` signs a ledger entry with the
+door's signing key (from the vault, or the `.doorkey.pem` beside the ledger),
+so it runs only where that key is readable. Anything that can read the key
+can also run `mandare reinstate` and sign other ledger entries: an
+environment where this command works is an operator environment. If yours
+cannot reach the key, the kill fails — tell the human to run it.
+
 ## What this skill will NOT do (operator actions)
 
 Issuing passports, mandates, or access tokens, and reinstating a killed
@@ -116,3 +125,7 @@ agent, are OPERATOR actions. If asked, do not run them yourself — tell the
 human the command to run (`mandare passport issue`, `mandare mandate issue`,
 `mandare token issue`, `mandare reinstate`) and why the separation exists:
 an agent that can widen its own permissions has no permissions at all.
+
+This is a rule you follow, not a boundary the tooling enforces: if your
+environment can run `mandare kill`, it holds the door key those commands
+need too. Never use that access to reopen a door or write to the ledger.
