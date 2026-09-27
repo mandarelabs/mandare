@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "description": "Pure, portable verification of Mandare ledger chains — embeddable by anyone, including parties who distrust us",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mandarelabs/mandare.git",
+    "directory": "packages/verifier"
+  },
   "type": "module",
   "sideEffects": false,
   "engines": {

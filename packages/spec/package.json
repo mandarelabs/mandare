@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "description": "Mandare open contracts: mandate and ledger-entry schemas, canonical JSON, hashing rules",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mandarelabs/mandare.git",
+    "directory": "packages/spec"
+  },
   "type": "module",
   "sideEffects": false,
   "engines": {

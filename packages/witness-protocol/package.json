@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "description": "Mandare witness protocol: salted chain-head submissions, signed acks, aggregate anchoring, and integrity certificates — inspectable and verifiable by anyone, including parties who distrust us",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mandarelabs/mandare.git",
+    "directory": "packages/witness-protocol"
+  },
   "type": "module",
   "sideEffects": false,
   "engines": {

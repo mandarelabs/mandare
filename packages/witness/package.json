@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "description": "Mandare reference witness server: records salted chain-head fingerprints per source, aggregates them into one anchored Merkle tree, serves witnessed-head lookups and signed acks",
   "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mandarelabs/mandare.git",
+    "directory": "packages/witness"
+  },
   "type": "module",
   "engines": {
     "node": ">=22.13.0"

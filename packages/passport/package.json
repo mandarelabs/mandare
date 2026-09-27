@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "description": "Mandare passport: did:key identity, owner→agent delegation credentials (SD-JWT VC), mandate transport, and RFC 9421 request signatures — verifiable by anyone, offline",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mandarelabs/mandare.git",
+    "directory": "packages/passport"
+  },
   "type": "module",
   "sideEffects": false,
   "engines": {

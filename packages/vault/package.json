@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "description": "Mandare vault: OS-keychain-backed credential storage, credential injection, and short-lived proof-of-possession scoped tokens — agents never see raw secrets",
   "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mandarelabs/mandare.git",
+    "directory": "packages/vault"
+  },
   "type": "module",
   "engines": {
     "node": ">=22.13.0"

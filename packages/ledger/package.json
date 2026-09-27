@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "description": "Mandare append-only ledger: hash-chained, door-signed entries in local SQLite",
   "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mandarelabs/mandare.git",
+    "directory": "packages/ledger"
+  },
   "type": "module",
   "engines": {
     "node": ">=22.13.0"

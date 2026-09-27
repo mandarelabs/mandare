@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "description": "Mandare card rail: Stripe Issuing door — mandate-checked virtual cards and real-time authorization decisions at the network level",
   "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mandarelabs/mandare.git",
+    "directory": "packages/card-rail"
+  },
   "type": "module",
   "engines": {
     "node": ">=22.13.0"

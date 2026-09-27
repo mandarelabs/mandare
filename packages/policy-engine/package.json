@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "description": "Mandare policy engine: Cedar-shaped evaluation interface for mandate enforcement (budgets/velocity land in S2)",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mandarelabs/mandare.git",
+    "directory": "packages/policy-engine"
+  },
   "type": "module",
   "sideEffects": false,
   "engines": {

@@ -3,6 +3,12 @@
   "version": "0.1.0",
   "description": "Mandare MCP server — expose the accountability door (verify, budgets, passports, mandates, kill) to any MCP host over stdio",
   "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mandarelabs/mandare.git",
+    "directory": "packages/mcp-server"
+  },
+  "mcpName": "com.mandarelabs/mandare",
   "type": "module",
   "engines": {
     "node": ">=22.13.0"

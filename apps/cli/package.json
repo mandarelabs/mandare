@@ -1,8 +1,13 @@
 {
   "name": "@mandarelabs/cli",
   "version": "0.1.0",
-  "description": "mandare \u2014 CLI for the Mandare accountability stack (verify, and later: kill, export, mandate)",
+  "description": "mandare — CLI for the Mandare accountability stack (verify, and later: kill, export, mandate)",
   "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mandarelabs/mandare.git",
+    "directory": "apps/cli"
+  },
   "type": "module",
   "engines": {
     "node": ">=22.13.0"
