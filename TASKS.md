@@ -2342,6 +2342,80 @@ map as follows:
 
 ---
 
+## CI flake fix — ledger red-team + MCP server (2026-09-27)
+
+**Scope:** three CI tests that each failed once on 2026-09-27 and passed on
+re-run with identical code. Branch `fix/test-flakes` off `main` (78bbffe).
+Test code only: no `src/` file, no `packages/spec` file and no workflow
+changed. No red-team assertion loosened (R5).
+
+**Status: all three root causes found, reproduced locally, fixed.** Loops on
+Node 22.23.3 and 24.21.0 (macOS arm64):
+ledger suite 12/12 per version idle and 8/8 per version under 24 CPU hogs;
+mcp-server 15/15 per version under the same load. Full local gate green
+(build · typecheck · lint · test · red-team).
+
+### Done
+
+- **Ledger REPLAY (SQLite, Node 24 job, `ledger is append-only`).** The test
+  forged the duplicated row's hash as `'aa' || substr(entry_hash, 3)`. Entry
+  hashes are random per run, so 1 time in 256 the real hash already starts
+  with `aa`. The "forgery" is then the original hash, and the W-3
+  no-collision trigger refuses the INSERT before the tamper reaches
+  verification. Reproduced with a 3000-iteration loop of the old SQL:
+  15/3000 failures on Node 22 and 13/3000 on Node 24, each one exactly an
+  `aa`-prefixed hash (errcode 1811, same message). The Postgres suite's
+  REPLAY had the same flaw (only `append_only` is disabled there, so
+  `no_replace` fired too). Fix: `forgedHashSql(prefix, fallback)` in
+  `test/helpers.ts` swaps in the fallback when the real hash already
+  carries the prefix. After the fix: 0/6000 inserts threw and 6000/6000
+  forgeries were caught by verification, 21 of them through the fallback
+  branch. Same assertions as before; the collision attack itself stays
+  covered by the W-3 tests. GAP INJECTION's `deadbeef` forgery (2^-32) got
+  the same guard.
+- **Ledger projection-race (Postgres, same job, ECONNREFUSED
+  127.0.0.1:55732).** Ports were `556xx + pid % 100`: inside Linux's
+  ephemeral range, while turbo runs every package's tests at once. The CI
+  log shows Postgres "could not bind IPv4 address 127.0.0.1: Address
+  already in use", listening on ::1 only, and still "ready". Reproduced
+  locally by holding the port: identical log lines, identical
+  ECONNREFUSED. Fix: `test/pg-harness.ts` takes the port from `listen(0)`
+  and starts Postgres with `listen_addresses=127.0.0.1` and no Unix
+  socket. A lost race then makes the postmaster exit (FATAL "could not
+  create any TCP/IP sockets") instead of coming up half-bound, and the
+  harness retries on a new port. Checked with a forced collision. Both PG
+  suites use it.
+- **MCP `mandare_kill closes the LIVE door` (Node 22 job, 5030 ms).** No
+  hang. The test runs two cold CLI child processes (kill, then verify); the
+  gateway round-trip is ~5 ms. Across 18 CI jobs it took 1.4–5.0 s (median
+  ~2.9 s), with a single CLI spawn at 0.6–2.5 s; locally it takes ~320 ms.
+  Reproduced on Node 22 under 10× CPU oversubscription: 3.8–4.4 s, split
+  evenly between the two spawns, and one timeout in four at 5004 ms. Fix:
+  the three CLI-spawning describes get `CLI_TEST_TIMEOUT_MS = 20_000` (4×
+  the worst observed). The raise is justified because the work is
+  legitimate process start + module load on a loaded 4-vCPU runner. A real
+  hang still fails, before the CLI's own 60 s timeout.
+
+### Decisions
+
+- **Keep the forgery attack, guard only the prefix.** Accepting the trigger
+  error as a pass would weaken R5 (the test would stop proving that
+  verification catches a replay that got past storage).
+- **Kernel-assigned port + fail-loud bind over a Unix-socket connection.**
+  The PG suites keep exercising the TCP connection strings that team mode
+  uses in production.
+- **Per-describe timeout, not a package-wide `testTimeout`.** The budget
+  sits next to the explanation of why it is needed.
+
+### Handoff
+
+- `main` is meant to stay frozen before the flip. Merging this PR changes
+  it, so G8 (`gh workflow run release.yml -R mandarelabs/mandare --ref main
+  -f publish=false`) and G4 must be re-run on the new `main`, and the launch
+  status board updated with the new run ids.
+
+---
+
 ## → S9b handoff (the public flip — the first irreversible session)
 
 Everything is staged; S9b executes `docs/launch/LAUNCH-CHECKLIST.md` top to
