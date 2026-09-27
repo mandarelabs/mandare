@@ -10,6 +10,7 @@ export { WitnessStore, epochSummary, type EpochRow } from './store.js';
 export {
   buildWitnessServer,
   epochInclusionFor,
+  type UpgradeRun,
   type WitnessServer,
   type WitnessServerOptions,
 } from './server.js';

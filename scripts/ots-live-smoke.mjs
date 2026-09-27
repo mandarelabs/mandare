@@ -104,6 +104,12 @@ async function upgrade() {
   const epoch = await latestEpoch();
   const { pending, bitcoin } = await receipt(epoch);
   const ageHours = ((Date.now() - Date.parse(epoch.created_at)) / 3_600_000).toFixed(1);
+  if ((epoch.anchor_status !== 'confirmed' || bitcoin.length === 0) && result.failures.length > 0) {
+    // A calendar answered but the upgrade failed — that is a bug or an outage,
+    // never "still pending" (the pre-fix script hid a parser bug this way).
+    for (const failure of result.failures) console.error(`UPGRADE FAILED (epoch ${failure.epoch}): ${failure.error}`);
+    return 1;
+  }
   if (epoch.anchor_status !== 'confirmed' || bitcoin.length === 0) {
     console.log(`STILL PENDING after ${ageHours} h (checked ${result.checked} epoch(s); ${pending.length} calendar(s) waiting).`);
     console.log('  Normal for the first hours — re-run later.');

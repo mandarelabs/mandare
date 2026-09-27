@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import { describe, expect, test } from 'vitest';
 
 import { bytesToHex, hexToBytes } from '@mandarelabs/spec';
@@ -321,6 +323,90 @@ describe('anchor adapters', () => {
     const anchor = new OpenTimestampsAnchor({ calendars: ['https://cal.test'], fetchImpl });
     const receipt = await anchor.anchor(digestHex);
     expect(await anchor.upgrade(receipt)).toEqual(receipt);
+  });
+});
+
+interface RealReply {
+  calendar: string;
+  commitment: string;
+  body_hex: string;
+  bitcoin_heights: number[];
+}
+const REAL = JSON.parse(readFileSync(new URL('./fixtures/ots-real-upgrade.json', import.meta.url), 'utf8')) as {
+  digest: string;
+  receipt_base64url: string;
+  replies: RealReply[];
+};
+
+/** Serve the recorded calendar replies; `override` maps a calendar to a status to force. */
+function recordedCalendars(override: Record<string, number> = {}): typeof fetch {
+  return ((url: Parameters<typeof fetch>[0]) => {
+    const u = String(url);
+    const reply = REAL.replies.find((r) => u === `${r.calendar}/timestamp/${r.commitment}`);
+    const forced = reply === undefined ? undefined : override[reply.calendar];
+    if (forced !== undefined) return Promise.resolve(new Response('calendar trouble', { status: forced }));
+    return Promise.resolve(
+      reply === undefined ? new Response('', { status: 404 }) : new Response(hexToBytes(reply.body_hex), { status: 200 })
+    );
+  }) as typeof fetch;
+}
+
+const REAL_RECEIPT = {
+  kind: 'opentimestamps',
+  digest: REAL.digest,
+  status: 'pending' as const,
+  created_at: '2026-09-26T11:40:01.819Z',
+  proof: REAL.receipt_base64url,
+  detail: null,
+};
+
+describe('real calendar proofs (captured from the F3 live smoke, 2026-09-27)', () => {
+  // A real Bitcoin upgrade path is one long op chain — 70–75 levels for the
+  // calendar reply alone. The S6 depth cap of 64 refused every real proof,
+  // so receipts stayed `pending` forever against the live calendars.
+  test('real Bitcoin-attested calendar replies (70–75 ops deep) parse', async () => {
+    for (const reply of REAL.replies) {
+      const stamp = await parseCalendarTimestamp(hexToBytes(reply.body_hex), hexToBytes(reply.commitment));
+      expect(collectBitcoin(stamp).map((b) => b.height)).toEqual(reply.bitcoin_heights);
+    }
+  });
+
+  test('upgrading the real pending receipt with the real replies confirms it (and it re-parses)', async () => {
+    const anchor = new OpenTimestampsAnchor({ calendars: REAL.replies.map((r) => r.calendar), fetchImpl: recordedCalendars() });
+    const upgraded = await anchor.upgrade(REAL_RECEIPT);
+    expect(upgraded.status).toBe('confirmed');
+    expect(upgraded.detail).toBe('bitcoin block 968682');
+    const reparsed = await parseOtsProof(base64UrlToBytes(upgraded.proof));
+    expect(bytesToHex(reparsed.digest)).toBe(REAL.digest);
+    expect(collectBitcoin(reparsed.timestamp).map((b) => b.height).sort()).toEqual([968682, 968707]);
+  });
+
+  test('one failing calendar does not block another that already has the proof', async () => {
+    const anchor = new OpenTimestampsAnchor({
+      calendars: REAL.replies.map((r) => r.calendar),
+      fetchImpl: recordedCalendars({ 'https://bob.btc.calendar.opentimestamps.org': 500 }),
+    });
+    const upgraded = await anchor.upgrade(REAL_RECEIPT);
+    expect(upgraded.status).toBe('confirmed');
+    expect(upgraded.detail).toBe('bitcoin block 968707');
+  });
+
+  test('no calendar upgraded and one failed → upgrade throws naming it (never a silent "pending")', async () => {
+    const anchor = new OpenTimestampsAnchor({
+      calendars: REAL.replies.map((r) => r.calendar),
+      fetchImpl: recordedCalendars({
+        'https://bob.btc.calendar.opentimestamps.org': 404,
+        'https://finney.calendar.eternitywall.com': 502,
+      }),
+    });
+    await expect(anchor.upgrade(REAL_RECEIPT)).rejects.toThrow(/finney\.calendar\.eternitywall\.com.*502/);
+  });
+
+  test('the depth bound still holds: a 300-op chain is refused', async () => {
+    const pendingTag = [0x83, 0xdf, 0xe3, 0x0d, 0x2e, 0xf9, 0x0c, 0x8e];
+    const uri = [...new TextEncoder().encode('https://cal.test')];
+    const body = Uint8Array.from([...new Array<number>(300).fill(0x08), 0x00, ...pendingTag, uri.length + 1, uri.length, ...uri]);
+    await expect(parseCalendarTimestamp(body, DIGEST)).rejects.toThrow(/too deep/);
   });
 });
 

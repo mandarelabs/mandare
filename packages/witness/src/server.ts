@@ -63,6 +63,13 @@ export interface WitnessServerOptions {
 
 const DEFAULT_ANCHOR_RUN_INTERVAL_MS = 60_000;
 
+/** Outcome of one upgrade pass: failures are reported, never folded into "pending". */
+export interface UpgradeRun {
+  checked: number;
+  confirmed: number[];
+  failures: { epoch: number; error: string }[];
+}
+
 export interface WitnessServer {
   app: FastifyInstance;
   store: WitnessStore;
@@ -72,7 +79,7 @@ export interface WitnessServer {
    * Ask the anchor to upgrade every pending receipt (OpenTimestamps: fetch
    * the calendars' Bitcoin attestations) and store any progress (I-5).
    */
-  runUpgrade(): Promise<{ checked: number; confirmed: number[] }>;
+  runUpgrade(): Promise<UpgradeRun>;
   close(): Promise<void>;
 }
 
@@ -241,11 +248,12 @@ export async function buildWitnessServer(options: WitnessServerOptions): Promise
   // Without this, OpenTimestamps receipts stay `pending` forever and never
   // reach Bitcoin (audit 2026-09, I-5). A failed upgrade leaves the receipt
   // as it was — honest, retryable on the next run.
-  const runUpgrade = async (): Promise<{ checked: number; confirmed: number[] }> => {
+  const runUpgrade = async (): Promise<UpgradeRun> => {
     const pending = store.pendingEpochs().filter(
       (row) => row.anchor_kind === options.anchor.kind && row.ots_base64 !== null
     );
     const confirmed: number[] = [];
+    const failures: UpgradeRun['failures'] = [];
     for (const row of pending) {
       const receipt: AnchorReceipt = {
         kind: options.anchor.kind,
@@ -261,10 +269,11 @@ export async function buildWitnessServer(options: WitnessServerOptions): Promise
         store.setEpochAnchor(row.epoch, { kind: next.kind, status: next.status, otsBase64: next.proof });
         if (next.status === 'confirmed') confirmed.push(row.epoch);
       } catch (error) {
-        app.log?.error?.(error);
+        // The receipt stays as it was (retryable) — but the caller hears why.
+        failures.push({ epoch: row.epoch, error: error instanceof Error ? error.message : String(error) });
       }
     }
-    return { checked: pending.length, confirmed };
+    return { checked: pending.length, confirmed, failures };
   };
 
   const anchorRunToken = options.anchorRunToken ?? null;

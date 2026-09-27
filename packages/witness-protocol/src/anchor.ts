@@ -123,8 +123,17 @@ export class OpenTimestampsAnchor implements Anchor {
     if (receipt.kind !== this.kind || receipt.status === 'confirmed') return receipt;
     const proof = await parseOtsProof(base64UrlToBytes(receipt.proof));
     let upgraded = false;
+    const failures: string[] = [];
+    // Each calendar independently: one that is down or answers garbage must
+    // not block another that already has the Bitcoin proof.
     for (const pending of collectPending(proof.timestamp)) {
-      const extension = await calendarUpgrade(pending, this.clientOptions);
+      let extension: OtsTimestamp | null;
+      try {
+        extension = await calendarUpgrade(pending, this.clientOptions);
+      } catch (error) {
+        failures.push(`${pending.uri}: ${error instanceof Error ? error.message : String(error)}`);
+        continue;
+      }
       if (extension !== null) {
         pending.stamp.attestations = pending.stamp.attestations.filter(
           (attestation) => attestation.kind !== 'pending' || attestation.uri !== pending.uri
@@ -134,7 +143,12 @@ export class OpenTimestampsAnchor implements Anchor {
         upgraded = true;
       }
     }
-    if (!upgraded) return receipt;
+    if (!upgraded) {
+      // Every calendar still 404 is honest `pending`; a failure is not —
+      // report it instead of letting it pass for "not yet".
+      if (failures.length > 0) throw new OtsError(`no calendar upgraded the receipt: ${failures.join(' · ')}`);
+      return receipt;
+    }
     const bitcoin = collectBitcoin(proof.timestamp);
     return {
       ...receipt,

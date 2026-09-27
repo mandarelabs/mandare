@@ -85,6 +85,9 @@ export async function runWitnessServe(options: WitnessServeOptions): Promise<num
           if (result.confirmed.length > 0) {
             console.log(`witness: Bitcoin-attested epoch(s) ${result.confirmed.join(', ')}`);
           }
+          for (const failure of result.failures) {
+            console.error(`witness: upgrade of epoch ${failure.epoch} failed: ${failure.error}`);
+          }
         },
         (error) =>
           console.error(`witness: upgrade run failed: ${error instanceof Error ? error.message : String(error)}`)

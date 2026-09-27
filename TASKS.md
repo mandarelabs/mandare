@@ -2104,6 +2104,40 @@ SHA, G3/G8 are re-run there, and the founder gates (G1, G2, F1, G5) close.
 
 ---
 
+## S10-fix 2B follow-up — real OpenTimestamps proofs (2026-09-27)
+
+**Found by founder gate F3.** The first live run (`pnpm ots-live-smoke`)
+stayed "still pending" for 17 h although both calendars had long since
+served the Bitcoin proof (HTTP 200). Two bugs, both invisible to CI because
+the mock calendar's proofs are shallow:
+
+1. **The OTS parser refused every real Bitcoin proof.** A real upgrade is one
+   long op chain — measured 70–75 levels for the calendar reply alone, ~90
+   merged into the receipt — and the S6 nesting cap was 64 ("timestamp tree
+   too deep"). Consequence beyond F3: no live witness could ever confirm an
+   anchor, and a certificate carrying a real upgraded receipt would have been
+   graded INVALID (proof-basis "unparseable"). Cap raised to 256
+   (python-opentimestamps' deserialization limit); work stays bounded by the
+   4096-node and 4096-byte op bounds (W-2), and a 300-op chain is still refused.
+2. **Upgrade failures were silent.** One calendar erroring aborted the whole
+   upgrade (so it could block another that had the proof), and `runUpgrade`
+   logged the error into a disabled logger — the smoke reported "pending".
+   Now each calendar is tried independently; no upgrade + any failure throws
+   naming the calendar; `runUpgrade` returns `failures`; the smoke exits 1
+   with `UPGRADE FAILED …`; `witness serve` logs them.
+
+**Evidence:** golden fixture `packages/witness-protocol/test/fixtures/
+ots-real-upgrade.json` (the real pending receipt + the Bitcoin-attested
+replies from bob and finney, public proof data over a throwaway root); new
+tests red on the old code (parse, full upgrade, one-failing-calendar,
+failure reporting). The fixed smoke run against a COPY of the founder's state
+PASSED (block 968682, 17.3 h), and both attested messages equal the Merkle
+roots of Bitcoin blocks 968682 and 968707 (mempool.space). test **732** (was
+726), red-team 210, Demo 5 green. The founder's own F3 run is still to do
+(after this merges: `pnpm build`, then `pnpm ots-live-smoke`).
+
+---
+
 ## → S9b handoff (the public flip — the first irreversible session)
 
 Everything is staged; S9b executes `docs/launch/LAUNCH-CHECKLIST.md` top to

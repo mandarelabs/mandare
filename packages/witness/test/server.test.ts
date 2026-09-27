@@ -208,6 +208,33 @@ describe('I-5: pending OpenTimestamps receipts are upgraded toward Bitcoin', () 
     }) as typeof fetch;
   }
 
+  test('a calendar that fails the upgrade is REPORTED, not shown as still pending', async () => {
+    const pendingOnly = mockCalendar({ confirmed: false });
+    const broken = ((url: Parameters<typeof fetch>[0]) =>
+      String(url).endsWith('/digest')
+        ? pendingOnly(url)
+        : Promise.resolve(new Response('calendar trouble', { status: 500 }))) as typeof fetch;
+    running = await startWitness({
+      anchor: new OpenTimestampsAnchor({ calendars: ['https://cal.test'], fetchImpl: broken }),
+    });
+    const { ledger } = makeLedger(1);
+    await new WitnessClient({
+      url: running.url,
+      signer: ledger.signer(),
+      readEntryHashes: () => Promise.resolve(ledger.entryHashes()),
+      witnessPublicKeyHex: running.key.publicKeyHex,
+    }).sync();
+    expect((await running.witness.runAnchor()).status).toBe('pending');
+
+    const result = await running.witness.runUpgrade();
+    expect(result.checked).toBe(1);
+    expect(result.confirmed).toEqual([]);
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]).toMatchObject({ epoch: 1 });
+    expect(result.failures[0]?.error).toMatch(/cal\.test.*500/);
+    ledger.close();
+  });
+
   async function latestEpoch(url: string): Promise<{ anchor_status: string; ots_base64: string | null }> {
     return (await (await fetch(`${url}/v1/epochs/latest`)).json()) as { anchor_status: string; ots_base64: string | null };
   }
@@ -226,18 +253,18 @@ describe('I-5: pending OpenTimestamps receipts are upgraded toward Bitcoin', () 
     }).sync();
     expect((await running.witness.runAnchor()).status).toBe('pending');
 
-    expect(await running.witness.runUpgrade()).toEqual({ checked: 1, confirmed: [] });
+    expect(await running.witness.runUpgrade()).toEqual({ checked: 1, confirmed: [], failures: [] });
     expect((await latestEpoch(running.url)).anchor_status).toBe('pending');
 
     state.confirmed = true;
-    expect(await running.witness.runUpgrade()).toEqual({ checked: 1, confirmed: [1] });
+    expect(await running.witness.runUpgrade()).toEqual({ checked: 1, confirmed: [1], failures: [] });
     const epoch = await latestEpoch(running.url);
     expect(epoch.anchor_status).toBe('confirmed');
     const proof = await parseOtsProof(base64UrlToBytes(epoch.ots_base64 ?? ''));
     expect(collectBitcoin(proof.timestamp)).toEqual([{ height: 812_345 }]);
 
     // Frozen once confirmed: nothing left to check.
-    expect(await running.witness.runUpgrade()).toEqual({ checked: 0, confirmed: [] });
+    expect(await running.witness.runUpgrade()).toEqual({ checked: 0, confirmed: [], failures: [] });
     ledger.close();
   });
 });

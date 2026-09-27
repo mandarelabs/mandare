@@ -40,7 +40,15 @@ export const BITCOIN_ATTESTATION_TAG = Uint8Array.from([0x05, 0x88, 0x96, 0x0d, 
 /** Parse bounds — calendar responses are external input (R4). */
 const MAX_VARUINT = 2 ** 32;
 const MAX_VARBYTES = 4096;
-const MAX_DEPTH = 64;
+/**
+ * Nesting cap. A real Bitcoin upgrade is ONE long op chain (calendar merkle
+ * path + transaction + block merkle path): measured 70–75 levels for the
+ * calendar reply alone, ~90 merged into a receipt (F3 live smoke,
+ * 2026-09-27). The S6 cap of 64 refused every real proof, so live receipts
+ * never left `pending`. 256 = python-opentimestamps' deserialization
+ * recursion limit; work stays bounded by MAX_NODES and the op byte bounds.
+ */
+const MAX_DEPTH = 256;
 const MAX_NODES = 4096;
 /**
  * Op bounds, python-opentimestamps' `MAX_MSG_LENGTH` / `MAX_RESULT_LENGTH`
