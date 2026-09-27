@@ -33,6 +33,19 @@ function toolText(result: unknown): string {
     .join('\n');
 }
 
+/**
+ * Every CLI-backed tool call is a cold `node` child process (the MCP server
+ * is a thin adapter over the CLI, see src/cli.ts). Locally one takes ~150 ms;
+ * on a 4-vCPU CI runner with turbo running every package's tests at once it
+ * took 0.6–2.5 s across 18 jobs, and the kill test (two spawns: kill, then
+ * verify; the gateway round-trip is ~5 ms) took 1.4–5.0 s — so vitest's
+ * default 5 s timed it out once (2026-09-27). Reproduced locally under 10×
+ * CPU oversubscription, with the time split evenly between the two spawns and
+ * nothing waiting. The budget is for that legitimate cold-start cost; a real
+ * hang still fails here, well before the CLI's own 60 s kill.
+ */
+const CLI_TEST_TIMEOUT_MS = 20_000;
+
 async function connectedClient(env: Record<string, string | undefined>): Promise<Client> {
   const server = createMandareMcpServer(loadMcpConfig(env));
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -42,7 +55,7 @@ async function connectedClient(env: Record<string, string | undefined>): Promise
   return client;
 }
 
-describe('mandare MCP server drives a real gateway', () => {
+describe('mandare MCP server drives a real gateway', { timeout: CLI_TEST_TIMEOUT_MS }, () => {
   const workDir = mkdtempSync(join(tmpdir(), 'mandare-mcp-'));
   const dbPath = join(workDir, 'ledger.db');
   const mandatePath = join(workDir, 'mandate.json');
@@ -201,7 +214,7 @@ describe('mandare MCP server drives a real gateway', () => {
   });
 });
 
-describe('token issuance keeps the secret out of model context (R2)', () => {
+describe('token issuance keeps the secret out of model context (R2)', { timeout: CLI_TEST_TIMEOUT_MS }, () => {
   const workDir = mkdtempSync(join(tmpdir(), 'mandare-mcp-vault-'));
 
   afterAll(() => {
@@ -238,7 +251,7 @@ describe('token issuance keeps the secret out of model context (R2)', () => {
   });
 });
 
-describe('argv hygiene: a model-chosen value never becomes a CLI flag (K-4)', () => {
+describe('argv hygiene: a model-chosen value never becomes a CLI flag (K-4)', { timeout: CLI_TEST_TIMEOUT_MS }, () => {
   const workDir = mkdtempSync(join(tmpdir(), 'mandare-mcp-argv-'));
   const env: Record<string, string | undefined> = {
     PATH: process.env.PATH,
