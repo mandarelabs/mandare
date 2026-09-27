@@ -3,10 +3,11 @@
 # from source on the user's machine (`docker compose up` builds it); nothing
 # is pulled from a registry until launch publishes signed images (Q24).
 #
-# v0 pragmatism, stated plainly: the image carries the full built monorepo
-# including dev node_modules — simplest single-install build, fastest first
-# `up`. Slim per-service images (pnpm deploy) are launch-time work.
-FROM node:24-slim
+# Two stages (S10-fix R-5): `build` installs everything and compiles; the
+# runtime stage carries the built tree with PRODUCTION dependencies only
+# (no compilers, test runners or linters) and runs as the unprivileged
+# `node` user. Per-service images (pnpm deploy) remain later work.
+FROM node:24-slim AS build
 
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     NEXT_TELEMETRY_DISABLED=1 \
@@ -37,6 +38,24 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
 
 COPY . .
 RUN pnpm build
+
+# Drop dev dependencies: a clean production-only install from the same store.
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    rm -rf node_modules apps/*/node_modules packages/*/node_modules && \
+    CI=true pnpm install --prod --frozen-lockfile --prefer-offline
+
+FROM node:24-slim AS runtime
+
+ENV NEXT_TELEMETRY_DISABLED=1 \
+    NODE_ENV=production
+
+WORKDIR /app
+COPY --from=build --chown=node:node /app /app
+
+# Named volumes inherit these directories' ownership on first use, so the
+# unprivileged user can write the ledger, mandate and witness state.
+RUN mkdir -p /data /witness-state && chown node:node /data /witness-state
+USER node
 
 # The demo mandate, ledgers, witness state live here (compose named volume).
 VOLUME /data

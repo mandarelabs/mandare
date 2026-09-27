@@ -1,15 +1,18 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import type { NextConfig } from 'next';
-
 /**
  * Local-first, zero-telemetry posture: no remote images, no external fonts
  * (system font stack in globals.css), no analytics. NEXT_TELEMETRY_DISABLED
  * is set by the dev/start environment (compose + install docs); Next itself
  * makes no runtime calls home.
+ *
+ * Plain JS (not next.config.ts) so `next start` needs no TypeScript: the
+ * image ships production dependencies only (S10-fix R-5).
+ *
+ * @type {import('next').NextConfig}
  */
-const nextConfig: NextConfig = {
+const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   // Monorepo root (pnpm workspace) — keeps file tracing anchored correctly.
