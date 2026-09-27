@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -50,7 +51,9 @@ export function loadMcpConfig(env: Record<string, string | undefined>): McpEnvCo
   }
   return {
     ledgerDb: env.MANDARE_LEDGER_DB ?? './mandare-ledger.db',
-    home: resolve(env.MANDARE_MCP_HOME ?? '.'),
+    // K-6: default outside any checkout — issued keys/grants must not land
+    // where `git add -A` or a docker build context can pick them up.
+    home: resolve(env.MANDARE_MCP_HOME ?? join(homedir(), '.mandare', 'mcp')),
     witnessUrl,
     witnessPublicKey,
     gatewayUrl: env.MANDARE_GATEWAY_URL ?? null,

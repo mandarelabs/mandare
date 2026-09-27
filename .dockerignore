@@ -7,10 +7,19 @@ node_modules
 .env
 .env.*
 !.env.example
-*.db
-*.db-*
-*.doorkey.pem
-*.masterkey
+# Secret material, at ANY depth (.dockerignore patterns are root-anchored
+# without **/; Dockerfile does COPY . .) — S10-fix K-6.
+**/*.db
+**/*.db-*
+**/*.doorkey.pem
+**/*.masterkey
+**/*.witnesskey.pem
+**/*.pem
+**/*.agent-key.json
+**/*.token.json
+**/.env
+**/.env.*
+!.env.example
 docs/demos
 dist
 data

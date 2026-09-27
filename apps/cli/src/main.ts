@@ -77,7 +77,8 @@ Usage:
       attestation authority keys from the vault (created on first use), mock
       IDV attestation (no PII), fresh agent did:key, revocation slot
       registered on the ledger. Writes the credential and the agent's private
-      key (0600, shown once).
+      key (0600, shown once) — by default to ~/.mandare/agents/, never over
+      an existing file.
 
   mandare mandate issue --agent <did:key> --out <path> [--purpose <text>]
                         [--currency EUR] [--per-tx 5] [--per-day 20]

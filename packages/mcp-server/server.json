@@ -27,7 +27,7 @@
         },
         {
           "name": "MANDARE_MCP_HOME",
-          "description": "Directory where issued artifacts (mandates, credentials, token grant files) are written",
+          "description": "Directory where issued artifacts (mandates, credentials, token grant files) are written (default ~/.mandare/mcp)",
           "isRequired": false,
           "isSecret": false
         },

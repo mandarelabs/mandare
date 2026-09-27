@@ -89,5 +89,9 @@ commands — the human signs once, the gateway enforces every call:
 MANDARE_MANDATE_PATH=mandate.sdjwt <restart the gateway>
 ```
 
+`passport issue` writes the credential and the agent's private key (0600)
+to `~/.mandare/agents/` — outside your checkout, so a `git add -A` or a
+docker build can't pick the key up.
+
 Everything else — vault-backed credentials, witness keys, card rail — is in
 [Self-hosting](/docs/self-host).

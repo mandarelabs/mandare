@@ -1,4 +1,5 @@
-import { existsSync, linkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 
 import { SUBJECT_REGISTER, agentSubject, mandateSubject, revocationProjector } from '@mandarelabs/ledger';
@@ -123,8 +124,15 @@ export async function runPassportIssue(
     return 2;
   }
   const validDays = options.validDays ?? DEFAULT_PASSPORT_VALID_DAYS;
-  const outPath = options.out ?? `${agentName}.passport.sdjwt`;
-  const keyOutPath = options.agentKeyOut ?? `${agentName}.agent-key.json`;
+  // K-6: by default identity files land in ~/.mandare/agents (0700), never
+  // in the working directory — a checkout's `git add -A` or a docker build
+  // context must not be able to pick up an agent's private key.
+  const defaultDir = join(homedir(), '.mandare', 'agents');
+  if (options.out === undefined || options.agentKeyOut === undefined) {
+    mkdirSync(defaultDir, { recursive: true, mode: 0o700 });
+  }
+  const outPath = options.out ?? join(defaultDir, `${agentName}.passport.sdjwt`);
+  const keyOutPath = options.agentKeyOut ?? join(defaultDir, `${agentName}.agent-key.json`);
   // K-5: refuse BEFORE anything is registered or written — a re-issue must
   // leave an existing passport/key pair (and the ledger) exactly as it was.
   for (const path of [outPath, keyOutPath]) {

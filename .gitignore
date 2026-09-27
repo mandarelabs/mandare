@@ -21,3 +21,10 @@ apps/docs/.source/
 .next/
 *.masterkey
 *.witnesskey.pem
+
+# Secret material the documented flows write (S10-fix K-6): agent private
+# keys, token grants (pop_secret), release/witness keys. Defaults now write
+# outside the checkout; these catch explicit in-repo paths.
+*.agent-key.json
+*.token.json
+*.pem

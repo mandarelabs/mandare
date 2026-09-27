@@ -90,6 +90,21 @@ describe('mandare passport/mandate issue (file-backend vault)', () => {
     expect(existsSync(keyPath)).toBe(false);
   });
 
+  test('by default the identity files land in ~/.mandare/agents, not the cwd (K-6)', async () => {
+    const previousHome = process.env.HOME;
+    process.env.HOME = dir;
+    try {
+      expect(await runPassportIssue(env, { agentName: 'homed' })).toBe(0);
+    } finally {
+      process.env.HOME = previousHome;
+    }
+    const agentsDir = join(dir, '.mandare', 'agents');
+    expect(statSync(agentsDir).mode & 0o777).toBe(0o700);
+    expect(statSync(join(agentsDir, 'homed.agent-key.json')).mode & 0o777).toBe(0o600);
+    expect(existsSync(join(agentsDir, 'homed.passport.sdjwt'))).toBe(true);
+    expect(existsSync('homed.agent-key.json')).toBe(false);
+  });
+
   test('mandate issue → verifiable SD-JWT VC; kill --mandate flips its slot', async () => {
     const passportOut = join(dir, 'a.passport.sdjwt');
     await runPassportIssue(env, {
