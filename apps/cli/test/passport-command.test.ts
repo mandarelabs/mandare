@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -62,6 +62,32 @@ describe('mandare passport/mandate issue (file-backend vault)', () => {
     expect(out.exitCode).toBe(0);
     expect(out.json.revocations?.subjects[0]?.subject).toBe(`agent:${verified.agentDid}`);
     expect(out.json.revocations?.subjects[0]?.revoked).toBe(false);
+  });
+
+  test('a second issue for the same name changes NEITHER file (K-5)', async () => {
+    const outPath = join(dir, 'twin.passport.sdjwt');
+    const keyPath = join(dir, 'twin.agent-key.json');
+    const options = { agentName: 'twin', out: outPath, agentKeyOut: keyPath, json: true };
+    expect(await runPassportIssue(env, options)).toBe(0);
+    const passportBefore = readFileSync(outPath, 'utf8');
+    const keyBefore = readFileSync(keyPath, 'utf8');
+
+    expect(await runPassportIssue(env, options)).toBe(1);
+    // The passport still matches the key file: same agent, untouched bytes.
+    expect(readFileSync(outPath, 'utf8')).toBe(passportBefore);
+    expect(readFileSync(keyPath, 'utf8')).toBe(keyBefore);
+    // Refused before the ledger: no second subject registered.
+    const out = await runVerify(env.MANDARE_LEDGER_DB as string);
+    expect(out.json.revocations?.subjects).toHaveLength(1);
+  });
+
+  test('an existing passport file alone also refuses, and writes no key (K-5)', async () => {
+    const outPath = join(dir, 'solo.passport.sdjwt');
+    const keyPath = join(dir, 'solo.agent-key.json');
+    writeFileSync(outPath, 'someone else\'s passport\n');
+    expect(await runPassportIssue(env, { agentName: 'solo', out: outPath, agentKeyOut: keyPath })).toBe(1);
+    expect(readFileSync(outPath, 'utf8')).toBe("someone else's passport\n");
+    expect(existsSync(keyPath)).toBe(false);
   });
 
   test('mandate issue → verifiable SD-JWT VC; kill --mandate flips its slot', async () => {

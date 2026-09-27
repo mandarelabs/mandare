@@ -1,4 +1,5 @@
-import { writeFileSync } from 'node:fs';
+import { existsSync, linkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 
 import { SUBJECT_REGISTER, agentSubject, mandateSubject, revocationProjector } from '@mandarelabs/ledger';
 import {
@@ -89,6 +90,29 @@ export interface PassportIssueOptions {
   json?: boolean;
 }
 
+/**
+ * Create `path` with `data`, atomically and only if it does not exist: the
+ * bytes go to a private temp file beside it, which is then hard-linked into
+ * place (link(2) fails with EEXIST instead of replacing, unlike rename(2)).
+ */
+function createNewFile(path: string, data: string, mode: number): void {
+  const temp = join(dirname(path), `.${basename(path)}.${process.pid}.${Date.now()}.tmp`);
+  writeFileSync(temp, data, { mode, flag: 'wx' });
+  try {
+    linkSync(temp, path);
+  } finally {
+    unlinkSync(temp);
+  }
+}
+
+function refuseExisting(error: unknown, path: string): number {
+  if ((error as { code?: string }).code !== 'EEXIST') {
+    throw error;
+  }
+  process.stderr.write(`error: ${path} already exists — refusing to overwrite agent identity files\n`);
+  return 1;
+}
+
 export async function runPassportIssue(
   env: Record<string, string | undefined>,
   options: PassportIssueOptions
@@ -99,6 +123,18 @@ export async function runPassportIssue(
     return 2;
   }
   const validDays = options.validDays ?? DEFAULT_PASSPORT_VALID_DAYS;
+  const outPath = options.out ?? `${agentName}.passport.sdjwt`;
+  const keyOutPath = options.agentKeyOut ?? `${agentName}.agent-key.json`;
+  // K-5: refuse BEFORE anything is registered or written — a re-issue must
+  // leave an existing passport/key pair (and the ledger) exactly as it was.
+  for (const path of [outPath, keyOutPath]) {
+    if (existsSync(path)) {
+      process.stderr.write(
+        `error: ${path} already exists — refusing to overwrite agent identity files (pass --out / --agent-key-out <new path>)\n`
+      );
+      return 1;
+    }
+  }
 
   const vault = Vault.open(loadVaultConfigFromEnv(env));
   const ctx = await openDoorContext(env);
@@ -131,25 +167,22 @@ export async function runPassportIssue(
       expiresSeconds: nowSeconds + validDays * DAY_SECONDS,
     });
 
-    const outPath = options.out ?? `${agentName}.passport.sdjwt`;
-    const keyOutPath = options.agentKeyOut ?? `${agentName}.agent-key.json`;
-    writeFileSync(outPath, `${credential}\n`);
     // The agent's private key is written ONCE, 0600, for the agent process —
     // it never enters the vault (the vault is the DOOR's side; the agent key
-    // is the one credential the agent itself legitimately holds). `wx` refuses
-    // to overwrite: re-issuing must not silently drop a new private key into a
-    // pre-existing, possibly looser-mode file (L3).
+    // is the one credential the agent itself legitimately holds). Both files
+    // are created atomically and never overwrite (L3, K-5): the key first,
+    // then the passport; if the passport path was taken in the meantime the
+    // fresh key is removed again, so the pair on disk always matches.
     try {
-      writeFileSync(keyOutPath, `${JSON.stringify(agent, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
+      createNewFile(keyOutPath, `${JSON.stringify(agent, null, 2)}\n`, 0o600);
     } catch (error) {
-      const code = (error as { code?: string }).code;
-      if (code === 'EEXIST') {
-        process.stderr.write(
-          `error: ${keyOutPath} already exists — refusing to overwrite an agent key file (pass --agent-key-out <new path>)\n`
-        );
-        return 1;
-      }
-      throw error;
+      return refuseExisting(error, keyOutPath);
+    }
+    try {
+      createNewFile(outPath, `${credential}\n`, 0o644);
+    } catch (error) {
+      unlinkSync(keyOutPath);
+      return refuseExisting(error, outPath);
     }
 
     if (options.json === true) {
