@@ -66,6 +66,7 @@ console.log(`[docs-install] fresh copy → ${freshDir}`);
     '--exclude', '*/.next',
     '--exclude', '*/.source',
     '--exclude', '*/.turbo',
+    '--exclude', './.turbo', // bsdtar's */.turbo misses the root cache (audit E20)
     '--exclude', './bin',
     '--exclude', '*.db',
     '--exclude', '*.db-*',
