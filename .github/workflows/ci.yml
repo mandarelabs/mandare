@@ -21,9 +21,9 @@ jobs:
       # no-op where it's already unflagged and required on older 22.x.
       NODE_OPTIONS: ${{ matrix.node == '22' && '--experimental-sqlite' || '' }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ matrix.node }}
           cache: pnpm
@@ -37,9 +37,9 @@ jobs:
     name: red-team tamper suite (rule R5)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
           cache: pnpm
@@ -51,9 +51,9 @@ jobs:
     name: smoke + runaway-cap demo (mock providers, no secrets)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
           cache: pnpm
@@ -93,6 +93,10 @@ jobs:
       - run: pnpm stack-smoke
       - run: pnpm skill-smoke
       - run: pnpm sdk-py-smoke
+      # R-1: the npm publish set (release.yml PUBLISH_PACKAGES) packed and
+      # installed into an empty directory from its own tarballs — the
+      # installed `mandare help` and an MCP initialize + tools/list must work.
+      - run: pnpm pack-install-smoke
       - name: Python client unit tests (pinned cross-language vector)
         working-directory: packages/sdk-py
         run: python3 -m unittest discover -s tests -v
@@ -106,9 +110,9 @@ jobs:
     name: docs-install-smoke (fresh copy, documented commands only)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
           cache: pnpm
@@ -122,7 +126,7 @@ jobs:
     name: compose-smoke (docker compose quickstart)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: docker compose up -d --wait
         timeout-minutes: 15
       - name: Run the quickstart demo

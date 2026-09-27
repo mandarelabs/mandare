@@ -11,15 +11,24 @@
 #   - Docker image: pushed to GHCR, cosign keyless signature +
 #     actions/attest-build-provenance.
 #   - OpenClaw skill: clawhub.skill.verify.v1 envelope signed with the
-#     release key (repo secret MANDARE_RELEASE_KEY_PEM) and then verified
-#     with the key PINNED (--expect-key — the S8/P1 gate: unsigned or
-#     unpinned artifacts fail closed). Dry runs sign with an EPHEMERAL key
-#     so the whole sign→pin→verify path is exercised without the secret.
+#     release key and then verified with the key PINNED (--expect-key — the
+#     S8/P1 gate: unsigned or unpinned artifacts fail closed). The real key
+#     (secret MANDARE_RELEASE_KEY_PEM on the `release` ENVIRONMENT, not a
+#     repo secret) is read by exactly one job, `sign-skill-release`, which
+#     runs only when publishing from a v* tag and installs nothing — no
+#     pnpm install/build/test ever runs where the key is readable (R-4). Dry
+#     runs sign with an EPHEMERAL key in `sign-skill-dry`, so the whole
+#     sign→pin→verify path is exercised without the secret. The key's public
+#     hex is written BESIDE the package (RELEASE-KEY.hex), never into it (K-3).
 #
 # PUBLISH SAFETY: the `gate` job refuses (exit 1, loud) any publish attempt
 # — tag push or dispatch with publish=true — while the repository is still
-# PRIVATE. Until the S9b flip, every run of this workflow is a dry-run by
-# construction; nothing can reach a registry.
+# PRIVATE, and any publish attempt from a ref that is not a v* tag. Every
+# publishing job additionally requires a v* tag ref and (except the SLSA
+# reusable workflow, which cannot take one) the `release` environment, whose
+# deployment rule the founder restricts to v* tags (LAUNCH-CHECKLIST F1).
+# Third-party actions are pinned by commit SHA (R-3); the SLSA generator is
+# the documented exception (it must be referenced by tag).
 
 name: Release
 
@@ -37,9 +46,15 @@ permissions:
   contents: read
 
 env:
+  # The CLI's full dependency closure, in publish (dependency) order: the
+  # Apache embeddable set, then the four AGPL runtime packages the CLI imports,
+  # then the CLI, then the MCP server that wraps it. `pnpm pack-install-smoke`
+  # (CI) packs exactly this list and installs it into an empty directory — a
+  # missing or mis-ordered package fails CI, not a stranger's `npm install`.
   PUBLISH_PACKAGES: >-
     packages/spec packages/policy-engine packages/verifier packages/passport
-    packages/witness-protocol packages/sdk packages/mcp-server apps/cli
+    packages/witness-protocol packages/sdk packages/ledger packages/vault
+    packages/card-rail packages/witness apps/cli packages/mcp-server
 
 jobs:
   gate:
@@ -49,6 +64,8 @@ jobs:
       publish: ${{ steps.decide.outputs.publish }}
     steps:
       - id: decide
+        env:
+          RUN_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
           WANT=false
@@ -59,19 +76,77 @@ jobs:
             echo "::error::publish requested (tag push or publish=true) but the repository is PRIVATE — the S9b public flip has not happened; refusing. See docs/launch/LAUNCH-CHECKLIST.md."
             exit 1
           fi
+          if [[ "$WANT" == "true" && "$RUN_REF" != refs/tags/v* ]]; then
+            echo "::error::publish requested from $RUN_REF — releases publish only from a v* tag ref; refusing."
+            exit 1
+          fi
           echo "publish=$WANT" >> "$GITHUB_OUTPUT"
           echo "mode: publish=$WANT (repo private=$PRIVATE)"
 
-  build-and-pack:
-    name: build · test · sign skill · pack · hash
+  # Dry runs: sign with a throwaway key. Never sees any secret.
+  sign-skill-dry:
+    name: sign skill (ephemeral key, dry run)
     needs: gate
+    if: needs.gate.outputs.publish != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+      - run: node scripts/sign-openclaw-skill-release.mjs --out dist/skill --ephemeral
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: openclaw-skill
+          path: dist/skill
+          retention-days: 30
+
+  # Releases: the ONLY job that can read the release key. Minimal on purpose:
+  # checkout + Node + two dependency-free scripts; no package installs.
+  sign-skill-release:
+    name: sign skill (RELEASE key, isolated)
+    needs: gate
+    if: needs.gate.outputs.publish == 'true' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+      - name: Sign + pin-verify with the release key (S8/P1 gate)
+        env:
+          RELEASE_KEY_PEM: ${{ secrets.MANDARE_RELEASE_KEY_PEM }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$RELEASE_KEY_PEM" ]]; then
+            echo "::error::publishing requires the MANDARE_RELEASE_KEY_PEM secret on the release environment (LAUNCH-CHECKLIST F1)"
+            exit 1
+          fi
+          KEY_FILE="$RUNNER_TEMP/release-key.pem"
+          ( umask 077 && printf '%s' "$RELEASE_KEY_PEM" > "$KEY_FILE" )
+          trap 'rm -f "$KEY_FILE"' EXIT
+          node scripts/sign-openclaw-skill-release.mjs --out dist/skill --key "$KEY_FILE"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: openclaw-skill
+          path: dist/skill
+          retention-days: 30
+
+  build-and-pack:
+    name: build · test · pack · hash
+    needs: [gate, sign-skill-dry, sign-skill-release]
+    # Exactly one signing job runs; the other is skipped by design.
+    if: >-
+      ${{ !cancelled() && needs.gate.result == 'success' &&
+      (needs.sign-skill-dry.result == 'success' || needs.sign-skill-release.result == 'success') }}
     runs-on: ubuntu-latest
     outputs:
       hashes: ${{ steps.hash.outputs.hashes }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
           cache: pnpm
@@ -91,40 +166,20 @@ jobs:
             (cd "$dir" && pnpm publish --dry-run --access public --no-git-checks)
           done
 
-      - name: Sign + pin-verify the OpenClaw skill (S8/P1 gate)
-        env:
-          RELEASE_KEY_PEM: ${{ secrets.MANDARE_RELEASE_KEY_PEM }}
-          MUST_PUBLISH: ${{ needs.gate.outputs.publish }}
+      # R-1: the exact publish set, packed and installed into an empty
+      # directory from the tarballs alone — `mandare help` + MCP tools/list.
+      - run: pnpm pack-install-smoke
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: openclaw-skill
+          path: dist/release
+      - name: The signed skill passes its own verifier AS UPLOADED (K-3)
         run: |
           set -euo pipefail
-          mkdir -p dist
-          if [[ -n "$RELEASE_KEY_PEM" ]]; then
-            printf '%s' "$RELEASE_KEY_PEM" > dist/release-key.pem
-            echo "signing with the RELEASE key (repo secret)"
-          elif [[ "$MUST_PUBLISH" == "true" ]]; then
-            echo "::error::publishing requires the MANDARE_RELEASE_KEY_PEM repo secret (LAUNCH-CHECKLIST F1)"
-            exit 1
-          else
-            # Dry run without the secret: sign with an ephemeral key so the
-            # sign→pin→verify path is still fully exercised.
-            openssl genpkey -algorithm ed25519 -out dist/release-key.pem
-            echo "dry run: signing with an EPHEMERAL key"
-          fi
-          chmod 600 dist/release-key.pem
-          MANDARE_RELEASE_KEY_PEM=dist/release-key.pem \
-            node scripts/package-openclaw-skill.mjs --out dist/release/openclaw-skill
-          PUBKEY_HEX=$(node -e '
-            const { createPublicKey } = require("node:crypto");
-            const { readFileSync } = require("node:fs");
-            const der = createPublicKey(readFileSync("dist/release-key.pem"))
-              .export({ format: "der", type: "spki" });
-            console.log(der.subarray(der.length - 32).toString("hex"));
-          ')
-          echo "release public key: $PUBKEY_HEX"
-          # The P1 gate: VERIFIED requires a signature from the PINNED key.
-          node scripts/verify-openclaw-skill.mjs dist/release/openclaw-skill --expect-key "$PUBKEY_HEX"
-          echo "$PUBKEY_HEX" > dist/release/openclaw-skill/RELEASE-KEY.hex
-          rm -f dist/release-key.pem
+          node scripts/verify-openclaw-skill.mjs dist/release/openclaw-skill \
+            --expect-key "$(cat dist/release/RELEASE-KEY.hex)"
+          tar -czf dist/release/openclaw-skill.tar.gz -C dist/release openclaw-skill
 
       - name: Pack artifacts + refuse workspace-protocol leaks + SHA256SUMS
         run: |
@@ -141,7 +196,7 @@ jobs:
             fi
           done
           cp packages/mcp-server/server.json dist/release/mcp-server.json
-          (cd dist/release && shasum -a 256 *.tgz mcp-server.json openclaw-skill/SHA256SUMS > SHA256SUMS)
+          (cd dist/release && shasum -a 256 *.tgz openclaw-skill.tar.gz RELEASE-KEY.hex mcp-server.json > SHA256SUMS)
           cat dist/release/SHA256SUMS
 
       - name: Compute SLSA subjects
@@ -154,18 +209,21 @@ jobs:
         run: docker build -t mandare:release .
         timeout-minutes: 20
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-artifacts
           path: dist/release
           retention-days: 30
 
   # SLSA Build L3 provenance over the artifact hashes (Q24). The reusable
-  # generator MUST be referenced by tag and runs only on real releases.
+  # generator MUST be referenced by tag and runs only on real releases. A job
+  # that calls a reusable workflow cannot take `environment:`, so the v*-tag
+  # condition is its ref restriction. (`!cancelled() && !failure()` because
+  # one of the two signing ancestors is always skipped by design.)
   provenance:
     name: SLSA L3 provenance
     needs: [gate, build-and-pack]
-    if: needs.gate.outputs.publish == 'true'
+    if: ${{ !cancelled() && !failure() && needs.gate.outputs.publish == 'true' && startsWith(github.ref, 'refs/tags/v') }}
     permissions:
       actions: read
       id-token: write
@@ -178,22 +236,23 @@ jobs:
   publish-npm:
     name: npm publish (Trusted Publishing, OIDC)
     needs: [gate, build-and-pack]
-    if: needs.gate.outputs.publish == 'true'
+    if: ${{ !cancelled() && !failure() && needs.gate.outputs.publish == 'true' && startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
+    environment: release
     permissions:
       contents: read
       id-token: write # OIDC exchange — no npm tokens exist anywhere
     steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
           cache: pnpm
           registry-url: 'https://registry.npmjs.org'
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
-      - name: Publish the Apache/embeddable set + CLI with provenance
+      - name: Publish the CLI's closure + MCP server with provenance (dependency order)
         run: |
           set -euo pipefail
           for dir in $PUBLISH_PACKAGES; do
@@ -204,18 +263,19 @@ jobs:
   publish-docker:
     name: GHCR push + cosign + build provenance
     needs: [gate, build-and-pack]
-    if: needs.gate.outputs.publish == 'true'
+    if: ${{ !cancelled() && !failure() && needs.gate.outputs.publish == 'true' && startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
+    environment: release
     permissions:
       contents: read
       packages: write
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: sigstore/cosign-installer@v3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -235,7 +295,7 @@ jobs:
       - name: cosign sign (keyless, transparency-logged)
         run: cosign sign --yes "${{ steps.push.outputs.image }}@${{ steps.push.outputs.digest }}"
       - name: GitHub build provenance attestation
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:
           subject-name: ${{ steps.push.outputs.image }}
           subject-digest: ${{ steps.push.outputs.digest }}
@@ -244,19 +304,22 @@ jobs:
   github-release:
     name: GitHub release (artifacts + SHA256SUMS)
     needs: [gate, build-and-pack, provenance]
-    if: needs.gate.outputs.publish == 'true' && startsWith(github.ref, 'refs/tags/v')
+    if: ${{ !cancelled() && !failure() && needs.gate.outputs.publish == 'true' && startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
+    environment: release
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: release-artifacts
           path: dist/release
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           draft: true # founder reviews + publishes the release notes by hand
           files: |
             dist/release/*.tgz
+            dist/release/openclaw-skill.tar.gz
+            dist/release/RELEASE-KEY.hex
             dist/release/SHA256SUMS
             dist/release/mcp-server.json

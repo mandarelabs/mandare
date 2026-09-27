@@ -1,0 +1,13 @@
+# Actions are pinned by commit SHA (R-3); Dependabot keeps the pins current
+# with reviewable PRs instead of letting a mutable tag move under us.
+# npm dependencies are deliberately NOT here: they follow the lockfile +
+# pnpm minimumReleaseAge cooldown and are bumped in reviewed passes.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
