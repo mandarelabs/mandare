@@ -49,6 +49,8 @@ open source:
 - **Card rail** — the same mandate governs a Stripe Issuing virtual card;
   the decline happens at the card network, in the authorization webhook,
   before the merchant sees an approval. One cap across LLM + card spend.
+  (In CI this runs against a Stripe mock that signs webhooks exactly like
+  Stripe does; the live Stripe test-mode run is still on my list.)
 
 Try it with no API keys (mock provider, real enforcement):
 
@@ -102,15 +104,22 @@ a second host closes this, and the docs say so on the front page, not in a
 footnote; (3) self-anchored verification (no witness) proves consistency,
 not authorship.
 
-**The pre-launch review.** Before going public, four parallel AI-assisted
-adversarial review passes (crypto/integrity, spend/enforcement,
-packaging/supply-chain, docs-vs-claims) — not an external audit; that is
-still pending — produced 15 findings — 3 HIGH, including a certificate
+**The pre-launch reviews.** Neither is an external audit; that is still
+pending. The first, in August, ran four parallel AI-assisted adversarial
+review passes (crypto/integrity, spend/enforcement, packaging/supply-chain,
+docs-vs-claims) and produced 15 findings — 3 HIGH, including a certificate
 key-binding gap and a token-estimation bound that under-reserved CJK input
 ~3x. All fixed with regression tests that fail on the pre-fix code, or
 documented as accepted residuals. The full report, including what was probed
 and held and the target list we're handing the external auditor, is in the
-repo: docs/SECURITY-REVIEW-S8.md. The red-team suites (tamper, replay,
+repo: docs/SECURITY-REVIEW-S8.md. A second AI-assisted pass in September went
+further and found worse, including a critical one: a cut or stalled streamed
+response settled at roughly zero cost, so a hijacked agent could spend past
+its cap. All but two of its 31 findings are fixed, the code ones with tests
+that fail on the pre-fix code (TASKS.md, S10-fix 2A–2C). The two open ones
+are documented there: a kill-only key for the agent skill, which gates the
+skill's release, and binding key provenance into the entry hash, which needs
+a spec version bump. The red-team suites (tamper, replay,
 forgery, budget races, witness split-view) run in CI on every push, on
 SQLite and Postgres, and the rule is they may never be weakened to make a
 change pass.
@@ -148,6 +157,12 @@ Ask me anything, including the uncomfortable ones.
 - **"What about the OpenClaw skill?"** Ships after its third-party audit,
   not with the initial launch — a skill is agent-executed instructions, so
   it gets the highest bar, not the lowest.
+- **"Has the card rail touched real Stripe?"** Not yet. CI drives it
+  against a Stripe mock that signs its authorization webhooks with Stripe's
+  exact scheme, so the signature check, the mandate check and the decline
+  path all run for real; what hasn't run is a live Stripe Issuing test-mode
+  card. That run (`pnpm card-live-smoke`) is next on my list, and until it
+  passes the post says so.
 - **"Does the witness see my prompts?"** No — sizes and salted 32-byte tree
   roots only. Selective-disclosure certificates let you prove specific
   entries to a third party without opening the rest.

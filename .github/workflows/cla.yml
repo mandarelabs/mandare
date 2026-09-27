@@ -25,6 +25,8 @@ jobs:
           path-to-signatures: 'signatures/version1/cla.json'
           path-to-document: 'https://github.com/mandarelabs/mandare/blob/main/CLA.md'
           branch: 'cla-signatures'
+          # Comma-separated GitHub logins that never need to sign; `*` wildcards allowed.
+          allowlist: 'dependabot[bot],github-actions[bot],art-mandarelabs'
           custom-notsigned-prcomment: >
             Thanks for the contribution! Before we can merge, please read our
             [CLA](https://github.com/mandarelabs/mandare/blob/main/CLA.md) and
