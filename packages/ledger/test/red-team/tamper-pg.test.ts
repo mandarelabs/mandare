@@ -2,7 +2,6 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import EmbeddedPostgres from 'embedded-postgres';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 
@@ -19,6 +18,7 @@ import { AsyncLedger } from '../../src/async-ledger.js';
 import { PgStore, provisionPgLedger } from '../../src/pg-store.js';
 import type { AppendInput } from '../../src/entry.js';
 import { forgedHashSql } from '../helpers.js';
+import { startEmbeddedPostgres, type EmbeddedPg } from '../pg-harness.js';
 
 /**
  * RED-TEAM SUITE, Postgres team-mode driver (rule R5, BUILD-DECISIONS Q7).
@@ -38,9 +38,7 @@ import { forgedHashSql } from '../helpers.js';
 
 const APP_ROLE = 'mandare_app';
 const APP_PASSWORD = 'red-team-app-pw';
-const PORT = 55440 + (process.pid % 100);
-
-let embedded: InstanceType<typeof EmbeddedPostgres>;
+let pgCluster: EmbeddedPg;
 let adminUrl: string;
 let appUrl: string;
 let ledger: AsyncLedger;
@@ -76,17 +74,9 @@ async function verifyPg() {
 
 beforeAll(async () => {
   const workDir = mkdtempSync(join(tmpdir(), 'mandare-pg-redteam-'));
-  embedded = new EmbeddedPostgres({
-    databaseDir: join(workDir, 'pgdata'),
-    user: 'postgres',
-    password: 'postgres',
-    port: PORT,
-    persistent: false,
-  });
-  await embedded.initialise();
-  await embedded.start();
-  adminUrl = `postgresql://postgres:postgres@127.0.0.1:${PORT}/postgres`;
-  appUrl = `postgresql://${APP_ROLE}:${APP_PASSWORD}@127.0.0.1:${PORT}/postgres`;
+  pgCluster = await startEmbeddedPostgres(workDir);
+  adminUrl = pgCluster.adminUrl;
+  appUrl = `postgresql://${APP_ROLE}:${APP_PASSWORD}@127.0.0.1:${pgCluster.port}/postgres`;
 
   const admin = await adminClient();
   await admin.query(`CREATE ROLE ${APP_ROLE} LOGIN PASSWORD '${APP_PASSWORD}'`);
@@ -112,7 +102,7 @@ afterAll(async () => {
   // half-closed connections (observed on CI; the pool error handler covers
   // the production case, this covers the test race).
   await new Promise((resolve) => setTimeout(resolve, 250));
-  await embedded.stop();
+  await pgCluster?.embedded.stop();
 }, 60_000);
 
 describe('privilege separation (layer 1: INSERT-only grants)', () => {

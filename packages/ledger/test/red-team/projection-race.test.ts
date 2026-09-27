@@ -2,7 +2,6 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import EmbeddedPostgres from 'embedded-postgres';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 
@@ -15,6 +14,7 @@ import { spendProjector, totalKey, type SpendGuard } from '../../src/projection.
 import { rebuildSpendProjection, verifySpendProjection } from '../../src/spend-ledger.js';
 import { ProjectionStaleError } from '../../src/store.js';
 import type { AppendInput } from '../../src/entry.js';
+import { startEmbeddedPostgres, type EmbeddedPg } from '../pg-harness.js';
 
 /**
  * RED-TEAM (R5): the budget-race attack at the DRIVER level, on BOTH stores.
@@ -76,32 +76,23 @@ describe('budget race — SQLite driver', () => {
 describe('budget race + projection integrity — Postgres driver', () => {
   const APP_ROLE = 'mandare_race_app';
   const APP_PASSWORD = 'red-team-race-pw';
-  const PORT = 55640 + (process.pid % 100);
 
-  let embedded: InstanceType<typeof EmbeddedPostgres>;
+  let pgCluster: EmbeddedPg;
   let adminUrl: string;
   let ledger: AsyncLedger;
   let store: PgStore;
 
   beforeAll(async () => {
     const workDir = mkdtempSync(join(tmpdir(), 'mandare-pg-race-'));
-    embedded = new EmbeddedPostgres({
-      databaseDir: join(workDir, 'pgdata'),
-      user: 'postgres',
-      password: 'postgres',
-      port: PORT,
-      persistent: false,
-    });
-    await embedded.initialise();
-    await embedded.start();
-    adminUrl = `postgresql://postgres:postgres@127.0.0.1:${PORT}/postgres`;
+    pgCluster = await startEmbeddedPostgres(workDir);
+    adminUrl = pgCluster.adminUrl;
     const admin = new pg.Client({ connectionString: adminUrl });
     await admin.connect();
     await admin.query(`CREATE ROLE ${APP_ROLE} LOGIN PASSWORD '${APP_PASSWORD}'`);
     await admin.end();
     await provisionPgLedger(adminUrl, { appRole: APP_ROLE });
     store = PgStore.connect(
-      `postgresql://${APP_ROLE}:${APP_PASSWORD}@127.0.0.1:${PORT}/postgres`
+      `postgresql://${APP_ROLE}:${APP_PASSWORD}@127.0.0.1:${pgCluster.port}/postgres`
     );
     ledger = await AsyncLedger.open(store, {
       doorId: 'gateway:pg-race-test',
@@ -113,7 +104,7 @@ describe('budget race + projection integrity — Postgres driver', () => {
     await ledger?.close();
     // Give client sockets a beat to settle before the server stops (S1 lesson).
     await new Promise((resolve) => setTimeout(resolve, 200));
-    await embedded?.stop();
+    await pgCluster?.embedded.stop();
   }, 60_000);
 
   test('40 concurrent reservations admit exactly floor(cap/estimate)', async () => {
