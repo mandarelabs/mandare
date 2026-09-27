@@ -2138,6 +2138,150 @@ roots of Bitcoin blocks 968682 and 968707 (mempool.space). test **732** (was
 
 ---
 
+## S10-fix 2C — Surfaces, packaging, release & docs (2026-09-27)
+
+**Scope:** the K-, R-, D-* findings of the second pre-launch audit (2026-09)
+plus the doc drift it listed. Branch `fix/release-and-packaging` off `main`
+(5f2e478). `packages/spec` untouched. No red-team assertion loosened (R5);
+skill-smoke only gained cases.
+
+**Status: every K-, R-, D-* fixed except the K-1 architecture (kill-only
+path), which gates Phase 6 (ClawHub), not the flip.** Full local gate green:
+build · typecheck · lint (+ license + turbo boundaries) · test **742** (was
+732: cli 43→50, mcp-server 7→10) · red-team **210** · all five demos · smoke /
+stack-smoke / skill-smoke / sdk-py-smoke / pack-install-smoke (new) /
+docs-install-smoke (now genuinely fresh: 0 of 15 cached) · Python unittests.
+actionlint clean.
+
+### Done
+
+- **R-1 (npm set uninstallable)** — `PUBLISH_PACKAGES` is the CLI's 12-package
+  closure in dependency order (+ ledger, vault, card-rail, witness; mcp-server
+  after cli). New `pnpm pack-install-smoke` (CI smoke job + release job):
+  reads the list from release.yml, checks closure/order, packs, `npm install`s
+  ONLY the tarballs into an empty dir, runs the installed `mandare help` and an
+  MCP initialize + tools/list. Red on the old list (closure check, and E404 on
+  `@mandarelabs/card-rail` when bypassed), green after. The same smoke caught
+  three more first-publish blockers the audit missed: no package had a
+  `repository` field (npm rejects `--provenance` when repository.url doesn't
+  match), `@mandarelabs/mcp-server` lacked `mcpName` (MCP registry npm
+  ownership check), and `server.json` used the pre-2025-09 snake_case schema
+  with a >100-char description. All fixed; server.json validated against the
+  published 2025-12-11 schema.
+- **R-2 (Next criticals)** — lockfile-only refresh, no range changed,
+  `minimumReleaseAge` respected: next 15.5.26, fastify 5.12.5, find-my-way,
+  fast-uri, qs, hono, nanoid, js-yaml, sharp, image-size, vitest 3.2.7,
+  brace-expansion. `pnpm audit --prod` 34 (2 critical) → 4 (0 critical): all
+  postcss 8.4.31, pinned exactly by next, build-time only. Dev: vitest 4
+  advisory (major). Transitive bumps were done with temporary overrides that
+  were removed again (the lockfile keeps the resolutions; frozen install OK).
+- **R-3 (unpinned actions)** — every `uses:` pinned by commit SHA with a
+  `# vX.Y.Z` comment (first-party actions too); SLSA generator stays on its
+  tag. Gate refuses publish from any ref that is not `refs/tags/v*`; every
+  publish job needs a v* ref, and all but the reusable SLSA call run in the
+  `release` environment. `.github/dependabot.yml` for github-actions.
+- **R-4 (real key on dry runs)** — the release key is read by exactly one job,
+  `sign-skill-release` (publish + v* tag + `release` environment), which only
+  checks out, sets up Node and runs two dependency-free scripts. Dry runs sign
+  in `sign-skill-dry` with an ephemeral key. build/test never see a key.
+- **K-3** — `scripts/sign-openclaw-skill-release.mjs` writes `RELEASE-KEY.hex`
+  BESIDE the package; build-and-pack re-verifies the downloaded package with
+  that pin before hashing; the draft release attaches the skill tarball and
+  the hex. Docs show `--expect-key` everywhere (pin source:
+  mandare.dev/security + the release asset).
+- **K-2 / K-7** — the verifier accepts only the packager's exact envelope
+  serialization (extra keys, signature extras, duplicate keys fail), only
+  regular files whose realpath is inside the package (any symlink fails), and
+  a pinned key always requires a signature (`--allow-unsigned` no longer
+  overrides `--expect-key`). skill-smoke: K-7, three injection variants, two
+  symlink variants, and the release-signing K-3 case.
+- **D-1 (docker demo died on velocity)** — compose-demo prices each runaway
+  call higher (claude-sonnet-4-6 × 60k ≈ €0.84) so the €20 day cap fires
+  first at the untouched default 60/min, requires `PER_DAY_EXCEEDED`, prints
+  `REFUSED: call #24 PER_DAY_EXCEEDED` (23 calls, €19.167947). stack-smoke
+  takes the gateway env from compose.yaml's own block (defaults resolved,
+  parent MANDARE_* scrubbed) and fails if ci.yml or README / quickstart /
+  SHOW-HN disagree with the printed refusal; CI greps the line. Red with the
+  old model: `VELOCITY_EXCEEDED` at #61, as the audit reported. `pnpm demo`
+  keeps its velocity override, now disclosed.
+- **K-1 wording** — skill, skill README, OpenClaw and MCP pages now say the
+  kill needs operator-level door access (the same key allows reinstate and
+  arbitrary signed entries); the no-reinstate rule is an instruction, not a
+  boundary; MCP `ALLOW_REINSTATE` is a tool-surface restriction only.
+- **K-4** — CLI: `--help` only directly after the command, `--` ends flags;
+  MCP: argv-bound strings may not start with `-`, and `mandare_kill` reports
+  success only on a `KILLED` line.
+- **K-5** — passport issue checks both paths before touching the ledger and
+  creates both files atomically without overwrite (temp + link(2)).
+- **K-6** — `*.agent-key.json`, `*.token.json`, `*.pem` gitignored; every
+  `.dockerignore` secret pattern is `**/`-anchored; passport issue defaults
+  to `~/.mandare/agents/` (0700), MCP home to `~/.mandare/mcp`.
+- **R-5** — two-stage Dockerfile: production-only reinstall, runtime stage
+  runs as `node`, `/data` + `/witness-state` pre-owned. The dashboard config
+  moved to `next.config.mjs` because `next start` tries to install
+  TypeScript for a `.ts` config — found by running the pruned tree locally
+  (no docker on this machine; compose-smoke in CI is the real check).
+- **Doc drift** — REPRODUCING (release.yml armed), install.sh (the corepack
+  global write), quickstart (.env keys behind an open door don't hold; route
+  to vault + auth; dashboard badge self-anchored unless
+  `MANDARE_DOOR_PUBLIC_KEY`), W-1 caveats + `--door-key` on the witness claims
+  (README #5, SHOW-HN, WITNESSING, cli ref, self-host, skill), new outcome
+  codes in WITNESSING, "independent reviewers" → AI-assisted passes with the
+  external audit pending (README, SHOW-HN, SECURITY-REVIEW-S8), Demo 1–4
+  captures re-taken, LAUNCH-CHECKLIST (F1 ×12 + `release` environment secret,
+  F3 DONE with the founder's evidence, PVR + org 2FA in Phase 1, docs deploy
+  before the tag, K-1 kill-only path as a Phase 6 gate).
+
+### Decisions (fix-session latitude; BUILD-DECISIONS untouched)
+
+1. **D-1: make the docker demo hit the budget, don't restate the number.**
+   The docker path is what Show HN readers run; it should show the product's
+   headline stop, at the stack's real defaults. The velocity default is
+   unchanged.
+2. **The release key moves to an environment secret** on `release`, not a
+   repo secret — so no job without that environment can read it at all.
+3. **All actions are SHA-pinned**, first-party included; Dependabot keeps
+   them current.
+4. **Review wording**: the S8 and 2026-09 reviews are described as
+   AI-assisted and not organisationally independent, per the audit's §4a.
+
+### Deviations from BUILD-DECISIONS
+
+None.
+
+### Residuals (open, owners noted)
+
+- **K-1 architecture** — a kill-only path (kill-only key or gateway endpoint
+  that verifiers accept for `agent.revoke` alone, recording the invoking
+  principal). Gates LAUNCH-CHECKLIST Phase 6 (ClawHub). Owner: a dedicated
+  session; likely touches the key directory's role semantics — check R6 first.
+- **Docker image not built locally** (no container runtime here): the R-5
+  stages were simulated (production-only reinstall of a clean copy, stack
+  topology + dashboard served from it); CI compose-smoke is the proof.
+  Volumes created by the old root image need `docker compose down -v`.
+- **The release workflow's new job graph has never run** — G8 (founder
+  dispatch, publish=false) is its first execution; expected: gate, then
+  `sign-skill-dry` → `build-and-pack` green, everything else skipped.
+- **`docs/demos/runaway-demo.cast/.gif`** still show the pre-S8 5th-decimal
+  estimate (regenerating needs the render toolchain; cosmetic).
+- **postcss 8.4.31** (next's exact pin) and **vitest 3** advisories remain —
+  build-time/dev only; G7 / a later dependency pass.
+
+### Go/no-go after 2C
+
+Code side: every audit blocking item owned by 2C (#5 K-1 wording, #6 R-1,
+#7 D-1, #8 R-2, #9 R-3) is fixed and tested; with 2A/2B/2D merged the
+audit's code blockers are closed. **The launch stays NO-GO for Thu
+2026-10-01** until: CI is green on origin at the flip SHA (all 6 jobs,
+incl. compose-smoke — never run with these changes), the founder re-runs G3
+(both scanners) and G8 there, and the founder gates close — G1, G2
+(trademark; unscoped npm `mandare`, PyPI `mandare`/`mandare-sdk` still
+unclaimed), F1 (Trusted Publishing ×12, `release` environment + secret, MCP
+DNS TXT), PVR + org 2FA, mandare.dev/security deployed, and G5 (the rewrite:
+content scrub + fresh repo, its own pass).
+
+---
+
 ## → S9b handoff (the public flip — the first irreversible session)
 
 Everything is staged; S9b executes `docs/launch/LAUNCH-CHECKLIST.md` top to

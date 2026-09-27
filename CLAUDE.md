@@ -78,6 +78,7 @@ pnpm stack-smoke                       # compose topology WITHOUT docker (entry 
 pnpm skill-smoke                       # OpenClaw skill commands E2E + trust envelope
 pnpm sdk-py-smoke                      # Python client ↔ real token-auth door
 pnpm docs-install-smoke                # fresh-copy install + Demo 1 from public docs (~4 min)
+pnpm pack-install-smoke                # npm publish set packed + installed alone; CLI help + MCP tools/list
 node scripts/check-license-boundaries.mjs
 ```
 
