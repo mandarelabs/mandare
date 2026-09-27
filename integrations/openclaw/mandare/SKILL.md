@@ -92,6 +92,11 @@ ledger:
 mandare verify --db "$MANDARE_LEDGER_DB" --witness "$MANDARE_WITNESS_URL" --witness-key "$MANDARE_WITNESS_PUBLIC_KEY"
 ```
 
+If the human gave you the door's public key out-of-band, append
+`--door-key <hex>` to the verify command: without it the witness check is
+bound to the source the ledger file itself declares, and the output says
+"self-declared source" — report that caveat, don't hide it.
+
 ```bash
 mandare certify --db "$MANDARE_LEDGER_DB" --witness "$MANDARE_WITNESS_URL" --witness-key "$MANDARE_WITNESS_PUBLIC_KEY" --out certificate.json
 ```

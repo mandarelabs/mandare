@@ -41,8 +41,11 @@ open source:
 - **Kill switch** — `mandare kill <agent>` is a local, offline operation.
   A kill that needs a cloud round-trip is a kill that can be jammed.
 - **Witnessing** — heads stream to an external witness (salted 32-byte
-  roots, zero content), so even the key-holding operator can't truncate or
-  rewrite history undetected. Aggregate roots anchor via OpenTimestamps.
+  roots, zero content). With the witness on infrastructure the operator
+  doesn't control, and the verifier holding the door key out-of-band
+  (`mandare verify --witness … --door-key <hex>`), even the key-holding
+  operator can't truncate or rewrite history undetected. Aggregate roots
+  anchor via OpenTimestamps.
 - **Card rail** — the same mandate governs a Stripe Issuing virtual card;
   the decline happens at the card network, in the authorization webhook,
   before the merchant sees an approval. One cap across LLM + card spend.
@@ -99,9 +102,10 @@ a second host closes this, and the docs say so on the front page, not in a
 footnote; (3) self-anchored verification (no witness) proves consistency,
 not authorship.
 
-**The pre-launch review.** Before going public, four independent adversarial
-review passes (crypto/integrity, spend/enforcement, packaging/supply-chain,
-docs-vs-claims) produced 15 findings — 3 HIGH, including a certificate
+**The pre-launch review.** Before going public, four parallel AI-assisted
+adversarial review passes (crypto/integrity, spend/enforcement,
+packaging/supply-chain, docs-vs-claims) — not an external audit; that is
+still pending — produced 15 findings — 3 HIGH, including a certificate
 key-binding gap and a token-estimation bound that under-reserved CJK input
 ~3x. All fixed with regression tests that fail on the pre-fix code, or
 documented as accepted residuals. The full report, including what was probed

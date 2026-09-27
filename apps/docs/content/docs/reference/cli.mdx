@@ -16,7 +16,7 @@ Hash chain, door signatures, RFC 6962 tree head.
 | `--door-key <hex>` | out-of-band door key → authorship, not just consistency |
 | `--key-directory <path\|url>` | JWKS key directory (multi-door, rotation windows) |
 | `--prev-head <size>:<root>` | recorded head → rollback/rewrite detection |
-| `--witness <url> --witness-key <hex>` | check against the external witnessed head history (truncation/rewrites) |
+| `--witness <url> --witness-key <hex>` | check against the external witnessed head history (truncation/rewrites); pair with `--door-key` so the lookup is bound to your door — otherwise it is labeled a self-declared source. Outcomes: `CONSISTENT`, `TRUNCATION DETECTED`, `FORK DETECTED`, `SOURCE MISMATCH`, `TIMELINE VIOLATION`, `UNAVAILABLE` |
 | `--prove <seq>` | inclusion proof for one entry (selective disclosure) |
 | `--json` | full machine-readable report |
 

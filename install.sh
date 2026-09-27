@@ -4,7 +4,9 @@
 #
 #   ./install.sh
 #
-# It only touches this checkout (./bin/mandare) — no sudo, no global writes.
+# It writes into this checkout (./bin/mandare) and needs no sudo. One global
+# side effect, only when pnpm is missing: `corepack enable` adds pnpm shims
+# next to your node binary (skip it by installing pnpm 10 yourself first).
 # After npm launch this script will also offer `npm i -g @mandarelabs/cli`;
 # building from source stays the path you can verify (REPRODUCING.md).
 set -euo pipefail
@@ -21,7 +23,7 @@ if [ "$(printf '%s\n%s\n' "$need_node" "$node_version" | sort -V | head -1)" != 
 fi
 
 if ! command -v pnpm >/dev/null 2>&1; then
-  echo "[install] enabling pnpm via corepack (ships with node)"
+  echo "[install] pnpm not found — running 'corepack enable' (adds pnpm shims next to node; the one global write)"
   corepack enable >/dev/null 2>&1 || {
     echo "error: corepack enable failed — install pnpm 10 manually: https://pnpm.io/installation" >&2
     exit 1

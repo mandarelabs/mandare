@@ -74,4 +74,9 @@ git pull && docker compose up -d --build
 
 The ledger, vault, mandate, and witness state live in the `mandare-data`
 volume and survive rebuilds. Verify after every update:
-`docker compose run --rm demo` or `mandare verify --spend --witness …`.
+`docker compose run --rm demo` or
+`mandare verify --spend --witness … --door-key <hex>` (the door key from a
+source other than the ledger file, so the witness check is bound to your
+door). The dashboard's witness badge is SELF-ANCHORED — bound only to the
+source the ledger file declares, and labeled so — unless you set
+`MANDARE_DOOR_PUBLIC_KEY` on the dashboard service.

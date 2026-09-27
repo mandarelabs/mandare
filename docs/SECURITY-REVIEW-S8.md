@@ -1,14 +1,16 @@
 # S8 — Adversarial pre-launch security review
 
 **Date:** 2026-08-09 · **Scope:** the complete Mandare system (S0–S7), the last
-gate before the repository goes public. This was an independent, adversarial
-pass — *find, verify, then fix* — not a build session. The frozen floor (all
+gate before the repository goes public. This was a separate, adversarial
+pass — *find, verify, then fix* — not a build session. It was AI-assisted and
+run inside the same build process (not organisationally independent); the
+external audit is still pending. The frozen floor (all
 S0–S7 red-team suites on both drivers, Demos 1–5) ended the session green and
 un-weakened.
 
 ## Method
 
-Four independent reviewers ran in parallel (Agent-Teams), one per lens, each
+Four parallel AI reviewer agents (Agent-Teams) ran one per lens, each
 prompted to **break the system, not bless it**, against now-disjoint package
 sets. Every reported finding was then re-traced against the live code by the
 orchestrator; only findings that reproduced were fixed. Each CONFIRMED code

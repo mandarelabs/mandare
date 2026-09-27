@@ -52,14 +52,27 @@ append entry                          per-source witnessed
 ## Detection: `mandare verify --witness`
 
 ```bash
-mandare verify --db ledger.db --witness https://witness.example --witness-key <hex>
+mandare verify --db ledger.db --witness https://witness.example --witness-key <hex> \
+  --door-key <door-public-key-hex>
 ```
+
+The witnessed history is looked up under the source the VERIFYING key
+defines — pass the door key out-of-band (`--door-key`, or `--key-directory`)
+so the check is bound to your real door. Without it the source is the one the
+ledger file declares, and every run labels it a "self-declared source".
 
 - Witnessed head size > local size → **TRUNCATION DETECTED** (exit 1).
 - Local chain does not extend the witnessed head append-only → **FORK
   DETECTED** (exit 1).
 - Witness unreachable → **UNAVAILABLE**, exit 1 — "cannot rule out
   truncation" is a failure, never a shrug.
+- The ledger's declared source ≠ the verifying key's → **SOURCE MISMATCH**
+  (exit 1) — the fingerprint of a re-witnessed, repointed split timeline.
+- The newest witnessed entry claims a time after the witness signed its head
+  (+5 min skew) → **TIMELINE VIOLATION** (exit 1).
+- Row-level checks run before the chain: a stored row that is not a
+  single-reading encoding of its entry is `STORAGE_MISMATCH`; an entry dated
+  before its predecessor is `TS_REGRESSION`.
 
 Demo 5 (`pnpm demo:witness`, CI acceptance) shows both attacks passing
 self-anchored verification and both convicted — including the strongest

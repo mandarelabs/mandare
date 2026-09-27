@@ -28,7 +28,11 @@ chain is valid, the budget counters equal a fresh replay of the ledger, and
 the witnessed head history covers the whole chain.
 
 Then open the dashboard: **http://127.0.0.1:8788** — fleet view, spend per
-agent, the ledger trail, and a working kill button.
+agent, the ledger trail, and a working kill button. Its witness badge is
+labeled SELF-ANCHORED: out of the box it checks the witness under the source
+the ledger file declares. Give the dashboard the door's public key
+out-of-band (`MANDARE_DOOR_PUBLIC_KEY`) to bind it — see
+[Self-hosting](/docs/self-host).
 
 What's running:
 
@@ -59,6 +63,16 @@ const anthropic = new Anthropic({ baseURL: 'http://127.0.0.1:8484' });
 ```
 
 Every call is now metered against the mandate and recorded on the ledger.
+
+<Callout type="warn">
+Keys in `.env` behind an unauthenticated door are a starting point, not a
+boundary. Any process on the host that can read `.env` — including a hijacked
+agent — can take the provider key and call the provider directly, bypassing
+the mandate; and anything that can reach the door's port can spend through
+it. Before real agents run against real money, move provider keys into the
+vault and turn on token or passport auth — see
+[Self-hosting](/docs/self-host).
+</Callout>
 For authenticated doors (scoped tokens / passports), see
 [SDKs](/docs/integrations/sdk).
 

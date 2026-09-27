@@ -95,7 +95,7 @@ no's.
 | 2 | A stolen token is dead paper; kill bites mid-task | `pnpm demo:dead-paper` |
 | 3 | One signed mandate replaces 40 prompts; humans approve async | `pnpm demo:mandate` |
 | 4 | The card declines AT THE NETWORK; one cap governs both rails | `pnpm demo:card` |
-| 5 | Truncation and rewrites can't hide from the witness | `pnpm demo:witness` |
+| 5 | Truncation and rewrites can't hide from an independent witness (verified with the door key held out-of-band) | `pnpm demo:witness` |
 
 Each demo also exists as a self-contained, narrated scenario in
 [`examples/`](examples/) — the story, the real captured output, and the code
@@ -115,13 +115,16 @@ to read next.
 
 ## Security & provenance
 
-- **Adversarially reviewed before launch**: four independent reviewers
-  (crypto/integrity · spend/enforcement · packaging/supply-chain ·
-  docs-vs-claims) were prompted to break the system. 15 findings — 3 HIGH —
-  all fixed with regression tests or documented as accepted residuals, none
-  silent. Full report: [`docs/SECURITY-REVIEW-S8.md`](docs/SECURITY-REVIEW-S8.md),
-  including what was probed and held, the honest residuals, and the target
-  list for the external audit.
+- **Adversarially reviewed before launch — by AI, not yet by an external
+  auditor**: four parallel AI-assisted review passes (crypto/integrity ·
+  spend/enforcement · packaging/supply-chain · docs-vs-claims) were prompted
+  to break the system. 15 findings — 3 HIGH — all fixed with regression tests
+  or documented as accepted residuals, none silent. Full report:
+  [`docs/SECURITY-REVIEW-S8.md`](docs/SECURITY-REVIEW-S8.md), including what
+  was probed and held, the honest residuals, and the target list for the
+  external audit. A second AI-assisted audit pass (2026-09) found further
+  spend, witnessing and packaging defects; their fixes and red-team cases are
+  logged in `TASKS.md` (S10-fix 2A–2D). The external audit is still pending.
 - **Fail-closed by construction**: no mandate → no spend; ledger down → no
   action; witness dead → high-value actions refuse (the kill switch never
   depends on anything remote).
