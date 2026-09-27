@@ -2282,6 +2282,66 @@ content scrub + fresh repo, its own pass).
 
 ---
 
+## G5 — History rewritten (2026-09-27)
+
+**Gate G5 (G-IDENT) closed by rewriting the history into a fresh repository.**
+Before the flip, every commit carried the founder's personal account (handle +
+e-mail) as author and committer, and three files quoted it. The whole history
+was rewritten with `git filter-repo` on a mirror clone, then pushed to a NEW
+private `mandarelabs/mandare`. The old repository was renamed to
+`mandarelabs/mandare-private-archive` and stays private, so the old commits are
+never reachable from the public repo by SHA or through old Actions runs.
+
+- **Identity:** author and committer on all 77 commits of `main` =
+  `Mandare Labs <arthur@mandarelabs.com>`. The `Co-Authored-By: Claude`
+  trailers are kept (77/77).
+- **Timestamps:** every offset normalised to `+0000`; the instants (epoch
+  seconds) are unchanged, checked commit by commit.
+- **Content scrub:** the one quoted string was replaced in every historical
+  version of TASKS.md, `docs/launch/LAUNCH-CHECKLIST.md` and
+  `docs/launch/SECRET-SCAN-S9.md` ("under the founder's personal account
+  (handle + e-mail)"). The tree of the new `main` differs from the old one
+  only in those 3 files (4 lines).
+- **Verified on the rewritten mirror:** 0 hits for the handle/address in
+  authors, committers, messages, every blob of every commit and every raw
+  object. G3: `gitleaks git --log-opts="--all" .` → no leaks found (78
+  commits); `trufflehog git file://. --no-update --fail` → 0 verified,
+  0 unverified.
+- **Pushed:** `main` only. The merged `fix/*` branches, the Dependabot branch
+  and the `refs/pull/*` refs stay in the archive. There were no tags.
+
+**Old → new SHAs.** Every commit SHA, CI run id and release-dry-run id recorded
+earlier in this file, in `docs/SECURITY-REVIEW-S8.md` and in `docs/launch/*`
+refers to the OLD history in the private archive. The recorded merge points
+map as follows:
+
+| Old (archive) | New | What |
+|---|---|---|
+| `cc55524` | `291ba80` | S9 |
+| `8c05d20` | `eb92357` | S8 |
+| `b45263a` | `73a7ee7` | S10-fix 2A merged |
+| `3ab3030` | `0c06246` | S10-fix 2D merged |
+| `013e44f` | `6c3097d` | S10-fix 2B merged |
+| `5f2e478` | `7674601` | OTS depth-cap fix merged |
+| `9af7acc` | `d773515` | S10-fix 2C merged |
+| `8e56fcb` | `9bdca82` | G5 Step 0 (CLA allowlist + Show HN wording); old → new `main` |
+
+**Consequences.**
+- The new repo starts with no environments, secrets, branch settings, Actions
+  history or PR history. F1 Parts 2–4 (`release` environment + secret, npm
+  Trusted Publishing ×12, MCP DNS TXT) run on this repo.
+- The `cla-signatures` branch was created at `9bdca82`. The CLA workflow's
+  allowlist covers `dependabot[bot]`, `github-actions[bot]` and the
+  maintainer account. Branch protection on `main` must not cover
+  `cla-signatures`, because the action commits to it.
+- Dependabot reopened its GitHub-Actions bump PR here. It stays unmerged until
+  after v0.1.0 (its major bumps touch only the publish jobs, which the G8 dry
+  run skips).
+- G4 (CI on the new `main`) and G8 (release dry run) must be re-run on this
+  repo; LAUNCH-STATUS records the run ids.
+
+---
+
 ## → S9b handoff (the public flip — the first irreversible session)
 
 Everything is staged; S9b executes `docs/launch/LAUNCH-CHECKLIST.md` top to
