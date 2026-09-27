@@ -100,6 +100,9 @@ gateway = spawn('node', [join(root, 'packages/gateway/dist/start.js')], {
     MANDARE_GATEWAY_PORT: '0',
     MANDARE_LEDGER_CURRENCY: 'EUR',
     MANDARE_USD_PER_LEDGER_UNIT: '1.08',
+    // Disclosed in README + examples/01: 71 calls in ~0.1 s would trip the
+    // default 60/min velocity limit first; this demo isolates the BUDGET.
+    // The docker demo (compose-demo.mjs) runs at the real default instead.
     MANDARE_MAX_CALLS_PER_MINUTE: '100000',
   },
   stdio: ['ignore', 'pipe', 'inherit'],

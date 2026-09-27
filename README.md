@@ -37,7 +37,8 @@ docker compose run --rm demo
 ```
 
 The demo releases a runaway agent loop against **your** gateway. The €20/day
-mandate kills it mid-run: `403`, the refusal is itself a ledger entry, and
+mandate kills it mid-run: 23 calls settle €19.17, call #24's reservation would
+cross €20 and is refused `403 PER_DAY_EXCEEDED`, the refusal is itself a ledger entry, and
 `mandare verify` proves chain VALID, counters == replay(ledger), and the
 witnessed head history covers the chain. Dashboard at
 **http://127.0.0.1:8788**. Real providers: put keys in `.env`
@@ -52,6 +53,11 @@ No docker:
 ```bash
 pnpm demo
 ```
+
+(`pnpm demo` runs a cheaper model and raises the gateway's default 60
+calls/minute velocity limit so the budget is the only limit in play: 71 calls,
+call #72 refused at the same €20 cap. The docker demo above runs the stack's
+real defaults.)
 
 ## Proofs, not data
 

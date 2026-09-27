@@ -9,6 +9,12 @@
  * Also runs outside compose: MANDARE_GATEWAY_URL / MANDARE_LEDGER_DB /
  * MANDARE_WITNESS_URL / MANDARE_WITNESS_PUBLIC_HEX (or _KEY) point it
  * anywhere. Asserts, not just prints (R7).
+ *
+ * The refusal must be the SPEND cap (PER_DAY_EXCEEDED), not the velocity
+ * limiter: compose runs the gateway at the default 60 calls/minute, so each
+ * call is priced high enough (claude-sonnet-4-6, 60k output tokens ≈ €0.83)
+ * that the €20 day cap fires well before call #61 (D-1). The last line CI
+ * greps is `REFUSED: call #<n> PER_DAY_EXCEEDED`.
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -32,6 +38,10 @@ function fail(message) {
 }
 setTimeout(() => fail('timed out after 300s'), 300_000).unref();
 
+const RUNAWAY_MODEL = 'claude-sonnet-4-6';
+const RUNAWAY_MAX_TOKENS = 60_000;
+const SPEND_CAP_CODE = 'PER_DAY_EXCEEDED';
+
 console.log('════════════════════════════════════════════════════════════════════');
 console.log(' MANDARE — a runaway agent loop dies at the cap, in YOUR stack');
 console.log('════════════════════════════════════════════════════════════════════');
@@ -49,8 +59,8 @@ for (let call = 1; call <= 2000; call += 1) {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        model: 'claude-haiku-4-5',
-        max_tokens: 60_000,
+        model: RUNAWAY_MODEL,
+        max_tokens: RUNAWAY_MAX_TOKENS,
         messages: [{ role: 'user', content: 'Continue the task. Generate as much as possible.' }],
       }),
     });
@@ -82,8 +92,11 @@ for (let call = 1; call <= 2000; call += 1) {
 }
 
 if (refusal === null) fail('the loop was never refused — the cap did not enforce');
-if (!/EXCEEDED/.test(refusal.code ?? '')) fail(`refusal code ${refusal.code} is not a budget cap`);
+if (refusal.code !== SPEND_CAP_CODE) {
+  fail(`refusal code ${refusal.code} is not the €20 day cap (${SPEND_CAP_CODE}) — the demo must die on the budget`);
+}
 if (!/^[0-9a-f]{64}$/.test(refusal.denied_entry ?? '')) fail('refusal was not recorded as a ledger entry');
+const refusedCall = completed + 1;
 console.log(`\n[demo] runaway made ${completed} calls before the mandate killed it.`);
 
 const cli = join(root, 'apps/cli/dist/main.js');
@@ -126,6 +139,7 @@ if (witnessUrl !== null && witnessKey !== null && /^[0-9a-f]{64}$/.test(witnessK
 
 console.log('════════════════════════════════════════════════════════════════════');
 console.log(` DEMO PASS: ${completed} calls, then a refusal WITH a receipt.`);
+console.log(` REFUSED: call #${refusedCall} ${refusal.code}`);
 console.log(' The human signed once; the mandate did the saying-no.');
 console.log(' Dashboard: http://127.0.0.1:8788 · Docs: https://mandare.dev');
 console.log('════════════════════════════════════════════════════════════════════');

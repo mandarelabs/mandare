@@ -21,8 +21,9 @@ docker compose run --rm demo
 ```
 
 The demo releases a runaway agent loop against **your** gateway. It will not
-stop on its own — the €20/day mandate stops it: the loop dies mid-run with a
-`403`, the refusal is itself a ledger entry, and `mandare verify` proves the
+stop on its own — the €20/day mandate stops it: 23 calls settle €19.17, then
+call #24's reservation would cross €20 and the loop dies with
+`403 PER_DAY_EXCEEDED`. The refusal is itself a ledger entry, and `mandare verify` proves the
 chain is valid, the budget counters equal a fresh replay of the ledger, and
 the witnessed head history covers the whole chain.
 

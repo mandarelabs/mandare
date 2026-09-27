@@ -133,6 +133,10 @@ jobs:
         run: |
           docker compose run --rm demo | tee /tmp/demo.out
           grep -q "DEMO PASS" /tmp/demo.out
+          # The loop must die on the €20 SPEND cap at the call the docs
+          # promise — not on the velocity limiter or any other refusal (D-1).
+          # stack-smoke asserts this exact line against the demo's output.
+          grep -q "REFUSED: call #24 PER_DAY_EXCEEDED" /tmp/demo.out
       - name: Dashboard renders real ledger data
         run: |
           curl -sf http://127.0.0.1:8788/ > /tmp/dash.html

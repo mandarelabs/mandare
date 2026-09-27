@@ -7,7 +7,11 @@ itself (or be talked) out of it.
 
 This scenario releases a deliberately runaway loop against a Mandare gateway
 under a signed mandate: **€5 per call, €20 per day, €100 total**. The human
-signed once. Nothing else was configured.
+signed once. The one other setting: the demo raises the gateway's default 60
+calls/minute velocity limit, so the budget is the only limit in play (71 calls
+in 0.1 s would otherwise trip the velocity limit first). The docker quickstart
+runs at the real default with a pricier model and dies on the same €20 cap
+at call #24.
 
 ## What happens
 

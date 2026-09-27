@@ -54,7 +54,8 @@ Try it with no API keys (mock provider, real enforcement):
     docker compose run --rm demo
 
 That releases an actual runaway loop against your own gateway and shows it
-dying at call #72, then proves the ledger. The five demos in `examples/` are
+dying at call #24 on the €20 day cap (€19.17 settled, the next reservation
+refused), then proves the ledger. The five demos in `examples/` are
 the CI acceptance tests — if the README claim and the test disagree, the
 test wins.
 

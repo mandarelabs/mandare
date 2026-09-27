@@ -39,9 +39,24 @@ for (const port of [9411, 18899, 18484]) {
 process.on('uncaughtException', (error) => fail(error.stack ?? String(error)));
 setTimeout(() => fail('timed out after 300s'), 300_000).unref();
 
-function start(name, script, env, readyMatch) {
+/** `KEY: value` lines of one compose service's environment block, defaults resolved. */
+function composeServiceEnv(yaml, service) {
+  const block = new RegExp(`^  ${service}:\\n[\\s\\S]*?^    environment:\\n((?:      .*\\n|\\s*#.*\\n)+)`, 'm').exec(yaml);
+  if (block === null) fail(`compose.yaml: no environment block for service ${service}`);
+  const env = {};
+  for (const line of block[1].split('\n')) {
+    const match = /^      ([A-Z0-9_]+): (.*)$/.exec(line);
+    if (match === null) continue;
+    const raw = match[2].trim().replace(/^"(.*)"$/, '$1');
+    const withDefault = /^\$\{[A-Z0-9_]+:-(.*)\}$/.exec(raw);
+    env[match[1]] = withDefault === null ? raw : withDefault[1];
+  }
+  return env;
+}
+
+function start(name, script, env, readyMatch, baseEnv = process.env) {
   const child = spawn('node', [join(root, script)], {
-    env: { ...process.env, ...env },
+    env: { ...baseEnv, ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   children.push(child);
@@ -90,41 +105,64 @@ await start('witness', 'docker/witness-entry.mjs', witnessEnv, /witness listenin
 
 await start('mock', 'scripts/mock-provider.mjs', { MOCK_PORT: '18899', MOCK_HOST: '127.0.0.1' }, /listening on/);
 
-const gatewayEnv = {
+// The gateway's env comes FROM compose.yaml (D-1): every variable the
+// compose service declares, with its `${VAR:-default}` default — no private
+// overrides. Only topology differs (host paths, host-local ports/URLs), and
+// the parent's MANDARE_* variables are scrubbed so a developer's shell cannot
+// soften the run either (the velocity cap once hid behind exactly that).
+const TOPOLOGY = {
   MANDARE_LEDGER_DB: join(dataDir, 'ledger.db'),
   MANDARE_MANDATE_PATH: join(dataDir, 'mandate.json'),
-  // 0.0.0.0 + the explicit opt-out, exactly as the compose service runs.
-  MANDARE_GATEWAY_HOST: '0.0.0.0',
-  MANDARE_GATEWAY_ALLOW_INSECURE_BIND: '1',
   MANDARE_GATEWAY_PORT: '18484',
-  MANDARE_LEDGER_CURRENCY: 'EUR',
-  MANDARE_USD_PER_LEDGER_UNIT: '1.08',
-  MANDARE_DEMO_PER_TX: '5',
-  MANDARE_DEMO_PER_DAY: '20',
-  MANDARE_DEMO_TOTAL: '100',
   ANTHROPIC_BASE_URL: 'http://127.0.0.1:18899',
-  ANTHROPIC_API_KEY: 'stack-smoke-not-a-secret',
+  OPENAI_BASE_URL: 'http://127.0.0.1:18899/v1',
   MANDARE_WITNESS_URL: 'http://127.0.0.1:9411',
   MANDARE_WITNESS_PUBLIC_HEX: join(dataDir, 'witness/public.hex'),
-  MANDARE_WITNESS_ACK_MODE: 'threshold',
-  MANDARE_MAX_CALLS_PER_MINUTE: '100000',
-  MANDARE_VAULT: undefined,
 };
-await start('gateway', 'docker/gateway-entry.mjs', gatewayEnv, /listening on (http:\/\/[\d.]+:\d+)/);
+const composeGatewayEnv = composeServiceEnv(composeYaml, 'gateway');
+for (const key of Object.keys(TOPOLOGY)) {
+  if (!(key in composeGatewayEnv)) fail(`compose.yaml gateway no longer declares ${key} — update TOPOLOGY`);
+}
+const inheritedEnv = Object.fromEntries(
+  Object.entries(process.env).filter(([key]) => !/^(MANDARE_|ANTHROPIC_|OPENAI_|OPENROUTER_)/.test(key))
+);
+const gatewayEnv = { ...composeGatewayEnv, ...TOPOLOGY };
+console.log(`[stack] gateway env from compose.yaml: ${Object.keys(composeGatewayEnv).length} variables`);
+await start('gateway', 'docker/gateway-entry.mjs', gatewayEnv, /listening on (http:\/\/[\d.]+:\d+)/, inheritedEnv);
 
 // The user-facing demo, exactly as `docker compose run --rm demo` runs it.
 const demo = spawn('node', [join(root, 'scripts/compose-demo.mjs')], {
   env: {
-    ...process.env,
+    ...inheritedEnv,
     MANDARE_GATEWAY_URL: 'http://127.0.0.1:18484',
     MANDARE_LEDGER_DB: join(dataDir, 'ledger.db'),
     MANDARE_WITNESS_URL: 'http://127.0.0.1:9411',
     MANDARE_WITNESS_PUBLIC_HEX: join(dataDir, 'witness/public.hex'),
   },
-  stdio: ['ignore', 'inherit', 'inherit'],
+  stdio: ['ignore', 'pipe', 'inherit'],
+});
+let demoOut = '';
+demo.stdout.on('data', (chunk) => {
+  demoOut += chunk;
+  process.stdout.write(chunk);
 });
 const demoCode = await new Promise((resolve) => demo.on('exit', resolve));
 if (demoCode !== 0) fail(`compose-demo exited ${demoCode}`);
+
+// DRIFT GUARD (D-1): the refusal the docker path prints is the one CI's
+// compose-smoke greps and the one README / quickstart / Show HN promise.
+const refused = /^ REFUSED: call #(\d+) (\S+)$/m.exec(demoOut);
+if (refused === null) fail('compose-demo printed no REFUSED line');
+const refusedLine = `REFUSED: call #${refused[1]} ${refused[2]}`;
+if (!readFileSync(join(root, '.github/workflows/ci.yml'), 'utf8').includes(`grep -q "${refusedLine}"`)) {
+  fail(`ci.yml compose-smoke does not assert '${refusedLine}' — update it to what the demo prints`);
+}
+for (const doc of ['README.md', 'apps/docs/content/docs/quickstart.mdx', 'docs/launch/SHOW-HN.md']) {
+  if (!readFileSync(join(root, doc), 'utf8').includes(`call #${refused[1]}`)) {
+    fail(`${doc} does not state the docker demo's real refusal (call #${refused[1]})`);
+  }
+}
+console.log(`[stack] docker-path refusal '${refusedLine}' matches CI and the docs`);
 
 for (const child of children) child.kill('SIGTERM');
 await Promise.all(children.map((child) => new Promise((resolve) => child.on('exit', resolve))));
