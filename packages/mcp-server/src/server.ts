@@ -85,8 +85,15 @@ const AGENT_NAME = z
   .max(64)
   .regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/, 'letters, digits, dot, dash, underscore');
 const DID = z.string().min(4).max(512).regex(/^did:[a-z0-9]+:[A-Za-z0-9._:%-]+$/, 'a DID');
-const MANDATE_ID = z.string().min(1).max(256).regex(/^[A-Za-z0-9:_.-]+$/);
-const REASON = z.string().min(1).max(500);
+/**
+ * K-4: every model-chosen string becomes a discrete argv entry, so none may
+ * start with `-` — a value like `--help` or `--all` must never be read by the
+ * CLI as a flag.
+ */
+const NOT_A_FLAG = (value: string): boolean => !value.startsWith('-');
+const NOT_A_FLAG_MESSAGE = 'must not start with "-" (it would be read as a CLI flag)';
+const MANDATE_ID = z.string().min(1).max(256).regex(/^[A-Za-z0-9:_.-]+$/).refine(NOT_A_FLAG, NOT_A_FLAG_MESSAGE);
+const REASON = z.string().min(1).max(500).refine(NOT_A_FLAG, NOT_A_FLAG_MESSAGE);
 const CAP = z.number().positive().finite().max(1_000_000);
 
 function timestampSlug(): string {
@@ -210,7 +217,7 @@ export function createMandareMcpServer(config: McpEnvConfig): McpServer {
         'The mandate file path is returned; point the gateway at it (MANDARE_MANDATE_PATH).',
       inputSchema: {
         agent_did: DID.describe("The agent's did:key (from mandare_issue_passport)"),
-        purpose: z.string().min(1).max(200).optional(),
+        purpose: z.string().min(1).max(200).refine(NOT_A_FLAG, NOT_A_FLAG_MESSAGE).optional(),
         currency: z.string().regex(/^[A-Z]{3}$/).optional(),
         per_tx: CAP.optional().describe('Max per single call/transaction, whole currency units'),
         per_day: CAP.optional(),
@@ -315,7 +322,13 @@ export function createMandareMcpServer(config: McpEnvConfig): McpServer {
       if (reason !== undefined) {
         args.push('--reason', reason);
       }
-      return cliResult(await runCli(args, env));
+      const result = await runCli(args, env);
+      // Success means the CLI said so: an exit 0 without the KILLED
+      // confirmation (help text, a no-op) is not a kill (K-4).
+      if (result.code === 0 && !/^KILLED /m.test(result.stdout)) {
+        return textResult(`kill NOT confirmed — the CLI printed no KILLED line\n${result.stdout.trim()}`, true);
+      }
+      return cliResult(result);
     }
   );
 

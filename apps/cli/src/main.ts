@@ -116,18 +116,36 @@ Exit codes:
   2  usage error
 `;
 
+class UsageError extends Error {}
+
 interface ParsedArgs {
   command: string | undefined;
   positionals: string[];
   flags: Map<string, (string | true)[]>;
+  /** `mandare --help`, `mandare help`, or `--help` right after the command. */
+  help: boolean;
 }
 
+/**
+ * K-4: `--help` is honoured only as the first token after the command — a
+ * flag VALUE that happens to be `--help` (an MCP-supplied kill reason, say)
+ * must not turn the command into a silent, successful no-op. `--` ends flag
+ * parsing: everything after it is positional data.
+ */
 function parseArgs(argv: string[]): ParsedArgs {
   const [command, ...rest] = argv;
+  const help = command === '--help' || command === 'help' || rest[0] === '--help';
   const positionals: string[] = [];
   const flags = new Map<string, (string | true)[]>();
   for (let i = 0; i < rest.length; i += 1) {
     const token = rest[i] as string;
+    if (token === '--') {
+      positionals.push(...rest.slice(i + 1));
+      break;
+    }
+    if (token === '--help' && i > 0) {
+      throw new UsageError('--help must directly follow the command');
+    }
     if (!token.startsWith('--')) {
       positionals.push(token);
       continue;
@@ -145,10 +163,8 @@ function parseArgs(argv: string[]): ParsedArgs {
       existing.push(value);
     }
   }
-  return { command, positionals, flags };
+  return { command, positionals, flags, help };
 }
-
-class UsageError extends Error {}
 
 function getString(flags: ParsedArgs['flags'], name: string): string | undefined {
   const values = flags.get(name);
@@ -502,7 +518,7 @@ async function main(): Promise<number> {
   const args = parseArgs(process.argv.slice(2));
   const { command, flags } = args;
 
-  if (command === undefined || command === 'help' || flags.has('help')) {
+  if (command === undefined || args.help) {
     process.stdout.write(USAGE);
     return command === undefined ? 2 : 0;
   }

@@ -1,5 +1,5 @@
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, rmSync, statSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -234,6 +234,64 @@ describe('token issuance keeps the secret out of model context (R2)', () => {
       pop_secret: string;
     };
     expect(grant.pop_secret.length).toBeGreaterThan(0);
+    await client.close();
+  });
+});
+
+describe('argv hygiene: a model-chosen value never becomes a CLI flag (K-4)', () => {
+  const workDir = mkdtempSync(join(tmpdir(), 'mandare-mcp-argv-'));
+  const env: Record<string, string | undefined> = {
+    PATH: process.env.PATH,
+    MANDARE_LEDGER_DB: join(workDir, 'ledger.db'),
+    MANDARE_MCP_HOME: workDir,
+  };
+
+  afterAll(() => {
+    rmSync(workDir, { recursive: true, force: true });
+  });
+
+  async function refused(args: Record<string, unknown>): Promise<boolean> {
+    const client = await connectedClient(env);
+    try {
+      const result = await client.callTool({ name: 'mandare_kill', arguments: args });
+      return result.isError === true;
+    } catch {
+      return true; // schema rejection surfaced as an MCP error
+    } finally {
+      await client.close();
+    }
+  }
+
+  test('a dash-leading reason or mandate id is rejected, not passed as argv', async () => {
+    expect(await refused({ agent_did: 'did:mandare:rogue', reason: '--help' })).toBe(true);
+    expect(await refused({ mandate_id: '--all' })).toBe(true);
+    expect(await refused({ mandate_id: '-x' })).toBe(true);
+  });
+
+  test('kill reports success only when the CLI confirms KILLED', async () => {
+    const fakeCli = join(workDir, 'silent-cli.mjs');
+    writeFileSync(fakeCli, 'process.exit(0);\n');
+    const previous = process.env.MANDARE_CLI;
+    process.env.MANDARE_CLI = fakeCli;
+    try {
+      const client = await connectedClient(env);
+      const result = await client.callTool({ name: 'mandare_kill', arguments: { agent_did: 'did:mandare:rogue' } });
+      expect(result.isError).toBe(true);
+      await client.close();
+    } finally {
+      if (previous === undefined) delete process.env.MANDARE_CLI;
+      else process.env.MANDARE_CLI = previous;
+    }
+  });
+
+  test('a real kill still succeeds and says KILLED', async () => {
+    const client = await connectedClient(env);
+    const result = await client.callTool({
+      name: 'mandare_kill',
+      arguments: { agent_did: 'did:mandare:rogue', reason: 'stop now' },
+    });
+    expect(result.isError ?? false).toBe(false);
+    expect(toolText(result)).toContain('KILLED did:mandare:rogue');
     await client.close();
   });
 });
