@@ -20,8 +20,8 @@
  *   node scripts/verify-openclaw-skill.mjs <packaged-skill-dir> --allow-unsigned   # dev only
  */
 import { createHash, createPublicKey, verify as edVerify } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { isAbsolute, join, relative, sep } from 'node:path';
 
 let dir;
 let expectKey;
@@ -70,15 +70,90 @@ function canonicalJson(value) {
   return JSON.stringify(value);
 }
 
-const envelope = JSON.parse(readFileSync(join(dir, 'clawhub.skill.verify.v1.json'), 'utf8'));
-if (envelope.schema !== 'clawhub.skill.verify.v1') {
-  console.error(`FAIL: unexpected schema ${envelope.schema}`);
+// The envelope file is agent-readable too, and only {schema,skill,version,
+// publisher,files} is signed (K-2). So the file must be EXACTLY what the
+// packager writes: those keys + a fixed-shape signature{} (or null),
+// serialized the one way the packager serializes it. An extra key, a
+// duplicate key (JSON.parse keeps the last, the raw bytes keep both) or any
+// other byte would carry unsigned text into an agent's context.
+const ENVELOPE_FILE = 'clawhub.skill.verify.v1.json';
+const ENVELOPE_KEYS = ['files', 'publisher', 'schema', 'signature', 'skill', 'version'];
+const SIGNATURE_KEYS = ['alg', 'over', 'publicKeyHex', 'value'];
+const SIGNED_OVER = 'canonical-json(schema,skill,version,publisher,files)';
+const FILE_HASH = /^sha256:[0-9a-f]{64}$/;
+
+function refuse(message) {
+  console.error(`FAIL: ${message}\n\n1 check(s) FAILED — do not trust this skill package`);
   process.exit(1);
+}
+function hasExactKeys(value, keys) {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    Object.keys(value).sort().join(',') === keys.join(',')
+  );
+}
+
+const packageRoot = realpathSync(dir);
+// Every file the verdict covers must be a REGULAR file whose real path is
+// inside the package — a symlink verifies today's bytes and can serve
+// different ones tomorrow, or point outside the package entirely (K-2).
+function assertRegularInside(rel) {
+  if (isAbsolute(rel) || rel.split(/[\\/]/).includes('..')) {
+    refuse(`${rel} is not a relative path inside the package`);
+  }
+  const path = join(dir, rel);
+  const stats = lstatSync(path, { throwIfNoEntry: false });
+  if (stats === undefined) {
+    refuse(`${rel} is listed in the envelope but missing`);
+  }
+  if (!stats.isFile()) {
+    refuse(`${rel} is not a regular file (${stats.isSymbolicLink() ? 'symlink' : 'special file'})`);
+  }
+  if (!realpathSync(path).startsWith(packageRoot + sep)) {
+    refuse(`${rel} resolves outside the package`);
+  }
+  return path;
+}
+
+const envelopeText = readFileSync(assertRegularInside(ENVELOPE_FILE), 'utf8');
+let envelope;
+try {
+  envelope = JSON.parse(envelopeText);
+} catch {
+  refuse(`${ENVELOPE_FILE} is not valid JSON`);
+}
+if (!hasExactKeys(envelope, ENVELOPE_KEYS)) {
+  refuse(`${ENVELOPE_FILE} must hold exactly {${ENVELOPE_KEYS.join(',')}} — extra/missing keys are unsigned content`);
+}
+if (envelope.schema !== 'clawhub.skill.verify.v1') {
+  refuse(`unexpected schema ${envelope.schema}`);
+}
+if (
+  envelope.signature !== null &&
+  (!hasExactKeys(envelope.signature, SIGNATURE_KEYS) ||
+    envelope.signature.alg !== 'ed25519' ||
+    envelope.signature.over !== SIGNED_OVER ||
+    typeof envelope.signature.value !== 'string')
+) {
+  refuse(`signature must be exactly {${SIGNATURE_KEYS.join(',')}} with alg ed25519 over ${SIGNED_OVER}`);
+}
+if (
+  envelope.files === null ||
+  typeof envelope.files !== 'object' ||
+  Array.isArray(envelope.files) ||
+  !Object.values(envelope.files).every((hash) => typeof hash === 'string' && FILE_HASH.test(hash))
+) {
+  refuse('envelope files must map relative paths to sha256:<hex> digests');
+}
+if (envelopeText !== `${JSON.stringify(envelope, null, 2)}\n`) {
+  refuse(`${ENVELOPE_FILE} is not the exact serialization of its content (duplicate keys or extra bytes)`);
 }
 
 let failures = 0;
 for (const [rel, expected] of Object.entries(envelope.files)) {
-  const actual = `sha256:${createHash('sha256').update(readFileSync(join(dir, rel))).digest('hex')}`;
+  const actual = `sha256:${createHash('sha256').update(readFileSync(assertRegularInside(rel))).digest('hex')}`;
   if (actual !== expected) {
     console.error(`FAIL: ${rel} hash mismatch\n  expected ${expected}\n  actual   ${actual}`);
     failures += 1;
@@ -95,7 +170,11 @@ function walk(base, current = base) {
   const entries = [];
   for (const name of readdirSync(current)) {
     const path = join(current, name);
-    if (statSync(path).isDirectory()) {
+    const stats = lstatSync(path);
+    if (stats.isSymbolicLink()) {
+      refuse(`${relative(base, path)} is a symlink — a package may carry regular files only`);
+    }
+    if (stats.isDirectory()) {
       entries.push(...walk(base, path));
     } else {
       entries.push(relative(base, path));
@@ -114,7 +193,7 @@ const expectedSums = `${Object.entries(envelope.files)
   .map(([rel, hash]) => `${hash.replace('sha256:', '')}  ${rel}`)
   .join('\n')}\n`;
 if (existsSync(join(dir, 'SHA256SUMS'))) {
-  const actualSums = readFileSync(join(dir, 'SHA256SUMS'), 'utf8');
+  const actualSums = readFileSync(assertRegularInside('SHA256SUMS'), 'utf8');
   if (actualSums !== expectedSums) {
     console.error('FAIL: SHA256SUMS does not match the envelope (doctored checksum file)');
     failures += 1;
@@ -124,7 +203,15 @@ if (existsSync(join(dir, 'SHA256SUMS'))) {
 }
 
 if (envelope.signature === null) {
-  if (allowUnsigned) {
+  if (expectKey !== undefined) {
+    // A pin means "only a signature by THIS key is acceptable" — the dev
+    // escape hatch never overrides it (K-7).
+    console.error(
+      `FAIL: envelope is UNSIGNED but --expect-key ${expectKey.slice(0, 12)}… was given — a pinned\n` +
+        '  publisher key requires a signature by that key; --allow-unsigned does not override a pin.'
+    );
+    failures += 1;
+  } else if (allowUnsigned) {
     console.warn(
       'envelope: UNSIGNED — accepted ONLY because --allow-unsigned was passed (local dev build).\n' +
         '  NEVER trust an unsigned skill from a third party: a re-packaged/tampered skill\n' +
