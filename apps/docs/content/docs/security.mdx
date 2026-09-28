@@ -33,12 +33,49 @@ done fully:
 - The OpenClaw skill ships a `clawhub.skill.verify.v1` envelope — sha256 of
   every file, Ed25519-signed on tagged releases — with a bundled verifier
   script (`scripts/verify-openclaw-skill.mjs --expect-key <hex>`, the key
-  pinned from this page — published here with the first signed release — and
-  the GitHub release's `RELEASE-KEY.hex`). ClawHub
-  has no publisher signing chain yet; we ship one anyway.
+  pinned from the [release signing key](#release-signing-key) below and the
+  GitHub release's `RELEASE-KEY.hex`). ClawHub has no publisher signing chain
+  yet; we ship one anyway.
 - `REPRODUCING.md` documents the honest reproducibility bar: pinned
   lockfile, provenance, independently rebuildable from a tagged commit — and
   explicitly does **not** claim bit-for-bit builds.
+
+## Release signing key
+
+Tagged releases sign the OpenClaw skill package with this Ed25519 key. Pin
+it from here, not from the download you are checking:
+
+```text
+19895f32484628f53c378eb94899a7a08492b13846bd28efba4e5691ca66e7a8
+```
+
+That is the raw 32-byte public key as 64 lowercase hex characters. Every
+GitHub release attaches the same value as `RELEASE-KEY.hex` (listed in the
+release's `SHA256SUMS`). If the two ever differ, trust neither and report
+it (see below).
+
+To verify a downloaded skill package, from a checkout of the repository:
+
+```bash
+node scripts/verify-openclaw-skill.mjs <skill-directory> \
+  --expect-key 19895f32484628f53c378eb94899a7a08492b13846bd28efba4e5691ca66e7a8
+```
+
+Exit 0 and `signature VALID and matches --expect-key` means every file hash
+matches and the envelope is signed by this key. An unsigned package, a
+package signed by any other key, or a run without `--expect-key` fails on
+purpose: a valid signature under an unknown key proves nothing.
+
+**Rotation.** The key changes only if it is compromised or retired. A
+rotation means a new key, the new hex published on this page and in the next
+GitHub release, the skill re-signed under it, and a security advisory that
+names the old key and the date it stopped being valid. A mismatch against
+your pinned key is therefore always a signal: check this page and the
+advisories before you accept a new key.
+
+| Key (Ed25519 public, hex) | Valid from | Status |
+| --- | --- | --- |
+| `19895f32…ca66e7a8` | first signed release (v0.1.0) | current |
 
 ## Verify, don't trust
 
@@ -51,5 +88,7 @@ verification), and the spec's canonical forms. `mandare verify` and
 ## Reporting a vulnerability
 
 Use GitHub **Private Vulnerability Reporting** on the repository (see
-`SECURITY.md`). Safe harbor for good-faith research; coordinated disclosure
-within 90 days. Please do not open public issues for security reports.
+`SECURITY.md`). If you cannot use it, email
+[info@mandarelabs.com](mailto:info@mandarelabs.com) with "security" in the
+subject. Safe harbor for good-faith research; coordinated disclosure within
+90 days. Please do not open public issues for security reports.

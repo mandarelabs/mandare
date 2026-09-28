@@ -3,6 +3,9 @@ import type { BaseLayoutProps } from 'fumadocs-ui/layouts/shared';
 export function baseOptions(): BaseLayoutProps {
   return {
     nav: {
+      // The site is served at mandarelabs.com/docs; "/" there is the static
+      // marketing page, which the Next router cannot client-navigate into.
+      url: '/docs',
       title: (
         <>
           <span style={{ color: 'var(--color-fd-primary)' }}>▣</span>&nbsp;mandare

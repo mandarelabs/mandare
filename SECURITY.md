@@ -5,7 +5,8 @@ Mandare is security infrastructure; we treat reports accordingly.
 ## Reporting a vulnerability
 
 Please use **GitHub Private Vulnerability Reporting** on this repository
-("Report a vulnerability" under the Security tab). We will:
+("Report a vulnerability" under the Security tab). If you cannot use it,
+email **info@mandarelabs.com** with "security" in the subject. We will:
 
 - acknowledge within 3 business days,
 - keep you informed of triage and fix progress,
