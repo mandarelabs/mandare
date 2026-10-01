@@ -5,9 +5,9 @@
 [![CI](https://github.com/mandarelabs/mandare/actions/workflows/ci.yml/badge.svg)](https://github.com/mandarelabs/mandare/actions/workflows/ci.yml)
 [![License: AGPL-3.0 + Apache-2.0](https://img.shields.io/badge/license-AGPL--3.0%20%2B%20Apache--2.0-blue)](LICENSING.md)
 [![npm](https://img.shields.io/npm/v/%40mandarelabs%2Fsdk?label=%40mandarelabs%2Fsdk)](https://www.npmjs.com/package/@mandarelabs/sdk)
-[![Security review](https://img.shields.io/badge/security_review-S8_adversarial-brightgreen)](docs/SECURITY-REVIEW-S8.md)
+[![Security review](https://img.shields.io/badge/security_review-AI--assisted,_audit_pending-lightgrey)](docs/SECURITY-REVIEW-S8.md)
 
-Mandare is the accountability stack for AI agent fleets: verified agent
+Mandare is the accountability stack for AI agent fleets: signed agent
 identity (**Passport**), signed machine-readable authority (**Mandate**), a
 tamper-evident ledger of what agents actually did (**Ledger**), an offline
 **kill switch** — and external **witnessing + public anchoring** so ledger
@@ -43,6 +43,9 @@ cross €20 and is refused `403 PER_DAY_EXCEEDED`, the refusal is itself a ledge
 witnessed head history covers the chain. Dashboard at
 **http://127.0.0.1:8788**. Real providers: put keys in `.env`
 ([docs](apps/docs/content/docs/quickstart.mdx)).
+
+When you're done, `docker compose down -v` removes the containers and the
+demo volumes (`mandare-data`, `mandare-witness-state`).
 
 No docker:
 

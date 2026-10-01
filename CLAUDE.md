@@ -1,6 +1,6 @@
 # Mandare — build guide for Claude Code sessions
 
-**Mandare is the accountability stack for AI agent fleets:** verified agent
+**Mandare is the accountability stack for AI agent fleets:** signed agent
 identity (Passport), signed machine-readable authority (Mandate), a
 tamper-evident local ledger of what agents actually did (Ledger), and evidence
 exports (Recourse). Local-first: raw activity never leaves the customer —

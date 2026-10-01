@@ -2510,6 +2510,25 @@ K-1.
 
 ---
 
+## README claims fix (2026-10-01)
+
+**Scope:** docs only (`README.md`, `CLAUDE.md`). No code, no release.
+
+- "verified agent identity" → "signed agent identity" in the README intro
+  and CLAUDE.md. In 0.1.0, requests are signed by an agent key (did:key,
+  RFC 9421) under a signed mandate, with revocation. Owner KYC goes through
+  the pluggable IDV interface, and its only provider is the mock
+  (`packages/passport/src/idv.ts`).
+- The security badge now reads "AI-assisted, audit pending" (lightgrey) instead
+  of a green "S8 adversarial". It still links to `docs/SECURITY-REVIEW-S8.md`.
+- The quickstart now says how to tear down: `docker compose down -v` removes
+  the containers and the `mandare-data` / `mandare-witness-state` volumes.
+- **Open for 0.1.1:** the docs site still says "verified agent identity" in
+  `apps/docs/app/(home)/page.tsx` and in the metadata description in
+  `apps/docs/app/layout.tsx`.
+
+---
+
 ## → S9b handoff (the public flip — the first irreversible session) — ORIGINAL (fulfilled — see the S9b log above)
 
 Everything is staged; S9b executes `docs/launch/LAUNCH-CHECKLIST.md` top to
