@@ -2560,6 +2560,46 @@ passed; the README stated a few things less carefully than the CLI does.
   `apps/docs/content/docs/integrations/mcp.mdx` still says "After npm launch
   this becomes `npx @mandarelabs/mcp-server`".
 
+## Day 2 — Glama listing spec + race-test docs drift (2026-10-01)
+
+**Scope:** metadata + docs only (`glama.json`, `threat-model.mdx`,
+`examples/01-runaway-budget-cap/README.md`). No code, no spec change, no
+release.
+
+- **`glama.json` (repo root).** Glama lists a server in search only once it
+  builds it and the server answers `tools/list`. Glama's published schema
+  documents only `maintainers`; the build keys (`baseImage`, `nodeVersion`,
+  `buildSteps`, `cmdArguments` behind `mcp-proxy`, `placeholderArguments`)
+  are the ones Glama's own build spec uses, taken from servers Glama lists
+  with built and scored tools (one of them a monorepo subfolder with no
+  Dockerfile of its own, one with a root Dockerfile next to its
+  `glama.json`). Decision: install the **published**
+  `@mandarelabs/mcp-server@0.1.0` from npm into `.glama/` instead of
+  building the monorepo (one npm install; `node:sqlite`, so no native
+  build), and create an empty throwaway ledger there at build time with
+  `Ledger.open` (door id `glama-demo`), so `mandare_verify` returns a real
+  verdict in Glama's inspector. `MANDARE_MCP_HOME=/tmp/mandare-mcp` keeps
+  issued artifacts out of the checkout (K-6). The root `Dockerfile` (the
+  self-host stack) is untouched.
+- **Proved locally** (macOS, Node 24.9): the two build steps run verbatim
+  from `glama.json` in a fresh clone; the `cmdArguments` run verbatim under
+  `mcp-proxy` and answer, over its streamable HTTP endpoint, `initialize`
+  (`mandare` 0.1.0, tools capability), `tools/list` (8 tools),
+  `resources/list` + `prompts/list` (-32601, no such capability declared)
+  and `mandare_verify` (`ok: true`, 0 entries, counters consistent). Not
+  proved: Glama's Linux image itself (no Docker on this Mac).
+- **Docs drift (T1-2):** the threat model said "a 20-way race test admits
+  exactly the calls that fit". Exact now: the gateway test is 25-way over
+  HTTP on SQLite and asserts settled spend never passes the cap; the exact
+  admission count (40-way) is the driver-level test
+  (`packages/ledger/test/red-team/projection-race.test.ts`), on SQLite and
+  Postgres. The example README's "on SQLite and Postgres" sentence and its
+  code pointers say the same. `docs/CARD-RAIL.md` and the card-rail
+  CLAUDE.md "20-way" are correct (the card-rail race test is 20-way).
+- **Open for 0.1.1:** bump the `@mandarelabs/mcp-server@0.1.0` pin in
+  `glama.json` with each release (Glama rebuilds on every push). The
+  `mandare-docs` Vercel project needs a redeploy for the threat-model text.
+
 ---
 
 ## → S9b handoff (the public flip — the first irreversible session) — ORIGINAL (fulfilled — see the S9b log above)

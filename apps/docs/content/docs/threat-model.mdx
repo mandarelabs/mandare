@@ -24,8 +24,10 @@ every attack below that we claim to catch is a permanent test.
 ## What is enforced pre-action
 
 - Budgets by **reservation inside the ledger transaction** — the
-  concurrent-overshoot race is closed structurally (a 20-way race test
-  admits exactly the calls that fit).
+  concurrent-overshoot race is closed structurally (a 25-way race test
+  through the gateway never lets settled spend pass the cap, and a 40-way
+  driver-level test admits exactly the reservations that fit, on SQLite and
+  Postgres).
 - Mandate windows, scopes, per-request identity (passport signature over the
   exact body bytes), revocation state (checked before auth, every request),
   and approval thresholds (fail-closed holds with a bounded pending set).

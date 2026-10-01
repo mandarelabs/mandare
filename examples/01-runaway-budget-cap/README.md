@@ -43,8 +43,9 @@ pass the check before any of them settles. Mandare **reserves** the
 estimated cost inside the same database transaction that appends the INTENT
 entry, under the ledger's write lock; the RESULT entry settles the true cost
 and releases the reservation. Given a correct price table, overshoot is
-impossible by construction, not statistically — there is a red-team test that fires N concurrent calls at
-the cap and asserts the exact admission count, on SQLite and Postgres.
+impossible by construction, not statistically — a gateway red-team test fires 25 concurrent calls at
+the cap and asserts that settled spend never passes it (SQLite), and a driver-level red-team test fires
+40 concurrent reservations and asserts the exact admission count, on SQLite and Postgres.
 
 Estimates are deliberately conservative (input tokens bounded by UTF-8 byte
 length — a provable ceiling for byte-level BPE in any script), and unknown
@@ -67,5 +68,6 @@ output: [`docs/demos/S2-runaway-demo.txt`](../../docs/demos/S2-runaway-demo.txt)
 
 - Reservation inside the append transaction: `packages/ledger/src/spend-ledger.ts`
 - Policy order (SPEC §5): `packages/policy-engine/src/engine.ts`
-- The budget-race red-team test: `packages/gateway/test/red-team/budget-race.test.ts`
+- The budget-race red-team tests: `packages/gateway/test/red-team/budget-race.test.ts` (HTTP path)
+  and `packages/ledger/test/red-team/projection-race.test.ts` (driver level, SQLite + Postgres)
 - The demo script itself: `scripts/demo-runaway.mjs`

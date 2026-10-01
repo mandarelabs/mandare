@@ -1,0 +1,19 @@
+{
+  "$schema": "https://glama.ai/mcp/schemas/server.json",
+  "maintainers": ["art-mandarelabs"],
+  "baseImage": "debian:trixie-slim",
+  "nodeVersion": "24",
+  "buildSteps": [
+    "npm install --prefix .glama --omit=dev --no-audit --no-fund @mandarelabs/mcp-server@0.1.0",
+    "cd .glama && node --input-type=module -e \"import { Ledger } from '@mandarelabs/ledger'; Ledger.open('demo-ledger.db', { doorId: 'glama-demo' }).close();\""
+  ],
+  "cmdArguments": [
+    "mcp-proxy",
+    "--",
+    "env",
+    "MANDARE_LEDGER_DB=.glama/demo-ledger.db",
+    "MANDARE_MCP_HOME=/tmp/mandare-mcp",
+    ".glama/node_modules/.bin/mandare-mcp"
+  ],
+  "placeholderArguments": {}
+}
