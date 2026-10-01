@@ -2529,6 +2529,39 @@ K-1.
 
 ---
 
+## README fix #2 — independent test findings (2026-10-01)
+
+**Scope:** docs only (`README.md`, one comment in `install.sh`). No code, no
+release. An outside tester ran the README on a clean Mac (npm CLI, MCP
+server, `./install.sh` + all 5 demos, dashboard, own tamper test): all
+passed; the README stated a few things less carefully than the CLI does.
+
+- Truncation condition stated: `pnpm demo` runs without a witness, so
+  self-anchored `verify` can't see entries dropped from the end of the
+  ledger (refusals included) without a saved `--prev-head`; the docker stack
+  runs a witness and `pnpm demo:witness` shows it catching that. The hero
+  caption no longer says verify "proves" the refusal; "keeps its no's" now
+  names the witness as what keeps them.
+- Hero caption names the no-docker run (#72) vs the docker quickstart (#24).
+- Demo spend is priced against the bundled mock provider (stated).
+- Prerequisites: Compose v2 (`up --wait` ≥ v2.1.1), images build locally on
+  first run; no-docker path needs Node ≥ 22.13 + pnpm 10, `corepack enable`
+  if pnpm is missing.
+- "Or from npm" block (`@mandarelabs/cli`, `@mandarelabs/mcp-server`);
+  `install.sh` comment no longer says "after npm launch".
+- Where state lands: vault master key in the OS keychain by default,
+  `~/.mandare/agents/`, `<ledger>.doorkey.pem` (0600).
+- **Open for 0.1.1:** `@mandarelabs/cli` npm description still says "verify,
+  and later: kill, export, mandate" (source `apps/cli/package.json` too);
+  deprecated `@sd-jwt/types|utils|jwt-status-list` 0.19.0 deps print npm
+  warnings on install; `mandare kill` prints `vault: legacy mode (no scoped
+  tokens)` without explanation; the dashboard gives no hint that the refusal
+  count may be stale when no witness is configured;
+  `apps/docs/content/docs/integrations/mcp.mdx` still says "After npm launch
+  this becomes `npx @mandarelabs/mcp-server`".
+
+---
+
 ## → S9b handoff (the public flip — the first irreversible session) — ORIGINAL (fulfilled — see the S9b log above)
 
 Everything is staged; S9b executes `docs/launch/LAUNCH-CHECKLIST.md` top to

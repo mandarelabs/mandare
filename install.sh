@@ -7,7 +7,7 @@
 # It writes into this checkout (./bin/mandare) and needs no sudo. One global
 # side effect, only when pnpm is missing: `corepack enable` adds pnpm shims
 # next to your node binary (skip it by installing pnpm 10 yourself first).
-# After npm launch this script will also offer `npm i -g @mandarelabs/cli`;
+# The published CLI is also on npm (`npm i -g @mandarelabs/cli`);
 # building from source stays the path you can verify (REPRODUCING.md).
 set -euo pipefail
 

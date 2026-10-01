@@ -16,13 +16,17 @@ on separate infrastructure, not even by the operator — the solo compose
 stack runs everything on one host and says so). Local-first: raw activity
 never leaves your machine.
 
-![A runaway agent loop dies at €20 — call #72 is refused, the refusal is itself a ledger entry, and `mandare verify` proves the chain](docs/demos/runaway-demo.gif)
+![A runaway agent loop dies at €20 in the no-docker demo — call #72 is refused, the refusal is written to the ledger, and `mandare verify` checks the chain](docs/demos/runaway-demo.gif)
 
-<sub>Replay of the captured [Demo 1](docs/demos/S2-runaway-demo.txt) run — the
+<sub>Replay of the captured [Demo 1](docs/demos/S2-runaway-demo.txt) run
+(`pnpm demo`, the no-docker path; the docker quickstart stops at call #24) — the
 same script CI executes and asserts on every push. Regenerate:
 `node scripts/render-demo-gif.mjs`.</sub>
 
 ## Quickstart — 3 commands, no API keys needed
+
+Needs Docker with Compose v2 (`up --wait` needs v2.1.1+). The images build
+locally on first run, which takes a few minutes.
 
 ```bash
 git clone https://github.com/mandarelabs/mandare && cd mandare
@@ -36,8 +40,9 @@ docker compose up -d --wait
 docker compose run --rm demo
 ```
 
-The demo releases a runaway agent loop against **your** gateway. The €20/day
-mandate kills it mid-run: 23 calls settle €19.17, call #24's reservation would
+The demo releases a runaway agent loop against **your** gateway, priced
+against a bundled mock provider: the enforcement is real, the money isn't.
+The €20/day mandate kills it mid-run: 23 calls settle €19.17, call #24's reservation would
 cross €20 and is refused `403 PER_DAY_EXCEEDED`, the refusal is itself a ledger entry, and
 `mandare verify` proves chain VALID, counters == replay(ledger), and the
 witnessed head history covers the chain. Dashboard at
@@ -47,7 +52,8 @@ witnessed head history covers the chain. Dashboard at
 When you're done, `docker compose down -v` removes the containers and the
 demo volumes (`mandare-data`, `mandare-witness-state`).
 
-No docker:
+No docker (Node ≥ 22.13 and pnpm 10; if pnpm is missing, `install.sh` runs
+`corepack enable`, a global change):
 
 ```bash
 ./install.sh
@@ -61,6 +67,28 @@ pnpm demo
 calls/minute velocity limit so the budget is the only limit in play: 71 calls,
 call #72 refused at the same €20 cap. The docker demo above runs the stack's
 real defaults.)
+
+`pnpm demo` runs without a witness, so `mandare verify` there can't see
+entries dropped from the end of the ledger — refusals included — unless you
+pass a saved `--prev-head`. The docker stack runs a witness, and
+`pnpm demo:witness` shows it catching exactly that.
+
+Or from npm (CLI + MCP server, no checkout; the MCP server reads the ledger
+at `MANDARE_LEDGER_DB`, default `./mandare-ledger.db`):
+
+```bash
+npm i -g @mandarelabs/cli && mandare help
+```
+
+```bash
+npx -y @mandarelabs/mcp-server
+```
+
+Where state lands: the CLI's vault (`./mandare-vault.db`, used by `passport
+issue` and `vault …`) keeps its master key in the OS keychain by default;
+`passport issue` writes the agent's credential and key under
+`~/.mandare/agents/` by default; and unless `MANDARE_VAULT=1`, the door's private key sits
+next to the ledger (`<ledger>.doorkey.pem`, mode 0600).
 
 ## Proofs, not data
 
@@ -87,8 +115,8 @@ integrity certificate to an auditor, a revocation bitstring to a verifier.
 ```
 
 Every door obeys three rules: **fail-closed on spend**, **log-before-act**,
-and **agent input is hostile**. Refusals are recorded — the system keeps its
-no's.
+and **agent input is hostile**. Refusals are ledger entries — the system keeps
+its no's, and a witness keeps them from being quietly dropped.
 
 ## The five demos are the acceptance tests (CI runs all of them)
 
