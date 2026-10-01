@@ -2416,7 +2416,101 @@ mcp-server 15/15 per version under the same load. Full local gate green
 
 ---
 
-## → S9b handoff (the public flip — the first irreversible session)
+## S9b — Public launch (2026-10-01)
+
+**Status: LAUNCH-CHECKLIST Phases 1–4 done.** The repo is public, v0.1.0 is
+on npm, GHCR and the MCP registry, and the docs are live. Phase 5 (Show HN)
+is the founder's. Phase 6 (ClawHub) stays gated on the external audit and
+K-1.
+
+### Gates (re-run on the flip SHA `9af84513c899ce1d19e918fa1deec8bad38dcbe1`)
+
+- G3: gitleaks 8.30.1 (no leaks, 86 commits, all refs) and trufflehog
+  3.96.0 (0 verified / 0 unverified) on a fresh mirror clone. Author and
+  committer on every branch: `Mandare Labs` or the GitHub bots, all `+0000`.
+- G4: CI run 36408533464, 6/6 jobs green. G8: release dry run 36412282213
+  green.
+- A content read of every branch, all history, PR texts, run logs,
+  artifacts and media metadata found nothing that had to stay private.
+
+### Phase 1 — flip
+
+- Visibility public. Secret scanning + push protection, Dependabot alerts
+  and Private Vulnerability Reporting enabled.
+- Branch protection on `main`: the 6 CI jobs required, enforced for
+  admins, no force-push, no deletion. `cla-signatures` is not covered (the
+  CLA action commits to it).
+- About: README one-liner, homepage mandarelabs.com/docs, topics
+  `ai-agents`, `budget`, `audit-log`, `transparency-log`, `mcp`.
+
+### Phase 1b — `release` environment (after the flip, before any tag)
+
+- Required reviewer = the maintainer account, self-review allowed,
+  `can_admins_bypass: false`, deployment policy = tags `v*` only.
+- `MANDARE_RELEASE_KEY_PEM` set as an environment secret. No repo-level
+  secrets exist.
+
+### Phase 2 — v0.1.0
+
+- Lightweight tag `v0.1.0` → `9af8451`. Release run 36814384048: gate
+  (`publish=true`), sign-skill-release (envelope signed with key
+  `19895f32…ca66e7a8`, pin-verified), build-and-pack, SLSA L3, npm
+  publish, GHCR + cosign, GitHub release, all green on attempt 1.
+- npm: 12 packages at `0.1.0`, `latest` = 0.1.0, published by GitHub
+  Actions through Trusted Publishing with SLSA provenance.
+- GHCR: `ghcr.io/mandarelabs/mandare:v0.1.0` =
+  `sha256:552119b7e0edd97d2a41d30cc5c3631014aed95a48cd84de8ae910b165996bfc`,
+  cosign keyless + build provenance attestation.
+- GitHub release: https://github.com/mandarelabs/mandare/releases/tag/v0.1.0
+  (12 tarballs, SHA256SUMS, `multiple.intoto.jsonl`, signed skill,
+  `mcp-server.json`, `RELEASE-KEY.hex`).
+- Verified as a stranger (fresh npm cache, logged out): `npm i -g
+  @mandarelabs/cli && mandare help`; `npx -y @mandarelabs/mcp-server`
+  `initialize` + `tools/list` (8 tools); `npm audit signatures` (186
+  registry signatures, 41 attestations); the npm provenance bundle via
+  `gh attestation verify --bundle … --digest-alg sha512`; `cosign verify`
+  with the exact `release.yml@refs/tags/v0.1.0` identity; `gh attestation
+  verify oci://ghcr.io/mandarelabs/mandare:v0.1.0`; `SHA256SUMS`; the
+  release's `RELEASE-KEY.hex` equals mandare.dev/security.
+
+### Phase 3 — MCP registry
+
+- `com.mandarelabs/mandare` 0.1.0 published (DNS auth on mandarelabs.com),
+  listed at `registry.modelcontextprotocol.io/v0/servers?search=mandare`.
+
+### Phase 4 — docs
+
+- mandarelabs.com/docs live; mandare.dev/security → `/docs/security` with
+  the key hex. Every README link resolves publicly.
+
+### Findings (none blocked the launch)
+
+- **The release was published, not drafted.** `generator_generic_slsa3`
+  with `upload-assets: true` creates the GitHub release for the tag
+  (published) before the `release`-environment jobs run; the
+  `github-release` job's `draft: true` then only adds files to it. Notes
+  were added by hand right after. Fix for 0.1.1: set the generator's
+  `draft-release: true`.
+- **GHCR packages start private.** A first push from Actions creates a
+  private org package; making it public needed the org's package-creation
+  setting to allow public packages first. Done; one-way by design.
+- **npm read-side lag.** Four packages answered 404 for `0.1.0` for up to
+  ~6 minutes after a successful publish. Check the publish log before
+  suspecting a failure.
+- **`gh attestation verify <tarball>` returns 404 for npm tarballs.** npm
+  provenance lives on the registry; verify with `npm audit signatures` or
+  `--bundle` from `/-/npm/v1/attestations/…`. The checklist wording is
+  fixed in this PR; REPRODUCING.md was already correct.
+- **The registry tarball of `@mandarelabs/cli` differs in hash from the
+  release asset:** npm reorders two dependencies in `package.json` when it
+  publishes; the file contents are otherwise identical. Each copy is
+  covered by its own provenance (npm provenance / SHA256SUMS + SLSA).
+- Stale npm descriptions in `apps/cli` and `packages/policy-engine`
+  shipped with 0.1.0; fixed in 0.1.1.
+
+---
+
+## → S9b handoff (the public flip — the first irreversible session) — ORIGINAL (fulfilled — see the S9b log above)
 
 Everything is staged; S9b executes `docs/launch/LAUNCH-CHECKLIST.md` top to
 bottom and does nothing else. Before starting, confirm the Phase 0 gate table

@@ -1,8 +1,10 @@
 # Launch checklist — the S9b go-live runbook
 
-Prepared in S9 (2026-08-09). **Nothing below has been executed.** The repo is
-private and no registry has been touched. This document is the ordered
-runbook for S9b, the public flip — the first irreversible session.
+Prepared in S9 (2026-08-09). **Phases 1–4 were executed on 2026-10-01
+(S9b)**: the repo is public, v0.1.0 is on npm, GHCR and the MCP registry.
+Phase 5 (Show HN) is the founder's; Phase 6 (ClawHub) stays audit-gated.
+Run ids and versions are in TASKS.md "S9b — Public launch". This document
+was the ordered runbook for S9b, the public flip.
 
 Everything in Phase 0 must be green before Phase 1 starts. Phases 1–5 run in
 order, ideally same-day. Phase 6 (the ClawHub skill) is deliberately LAST
@@ -12,20 +14,19 @@ and gated on the external audit — it does not block the launch.
 
 ## Phase 0 — Gates (all must pass; any red = no flip)
 
-Statuses below were set 2026-08-09 and updated by the S10-fix sessions
-(2026-09-26/27; see TASKS.md). Every fix commit moved the flip commit, so
-G3, G4 and G8 must be re-run on the exact SHA that goes public.
+Final statuses as of the flip (2026-10-01). The flip commit was `main` =
+`9af8451`; G3, G4 and G8 were re-run on exactly that SHA.
 
 | # | Gate | Status |
 |---|---|---|
-| G1 | **Founder go** — explicit, same-day decision to launch | OPEN |
-| G2 | **Trademark clearance** — "Mandare" search (EUIPO + USPTO + npm/GitHub squatting check) before the name is public and expensive to change | OPEN (founder) |
-| G3 | **Secret scan on the final commit** — `gitleaks git --log-opts="--all" .` AND `trufflehog git file://. --no-update --fail` both clean | S9 scan CLEAN (see [SECRET-SCAN-S9.md](SECRET-SCAN-S9.md)); re-run on the exact flip commit |
-| G4 | **CI green on origin** at the flip commit (all jobs incl. compose-smoke — which now asserts `REFUSED: call #24 PER_DAY_EXCEEDED` — and the smoke job's `pack-install-smoke`) | re-check at flip |
+| G1 | **Founder go** — explicit, same-day decision to launch | **DONE 2026-10-01** |
+| G2 | **Name check** — "Mandare" search before the name is public and expensive to change | **DONE** (founder) |
+| G3 | **Secret scan on the final commit** — `gitleaks git --log-opts="--all" .` AND `trufflehog git file://. --no-update --fail` both clean | **CLEAN 2026-10-01** on `9af8451`, all refs (gitleaks 8.30.1: no leaks; trufflehog 3.96.0: 0 verified / 0 unverified). Earlier S9 scan: [SECRET-SCAN-S9.md](SECRET-SCAN-S9.md) |
+| G4 | **CI green on origin** at the flip commit (all jobs incl. compose-smoke — which now asserts `REFUSED: call #24 PER_DAY_EXCEEDED` — and the smoke job's `pack-install-smoke`) | **GREEN** on `9af8451` (run 36408533464, 6/6 jobs) |
 | G5 | **Author-identity decision** (G-IDENT) — all 37 commits are under the founder's personal account (handle + e-mail); accept (recommended) or rewrite history BEFORE the flip, never after | **DONE 2026-09-27** — history rewritten into a fresh repo; old repo = private `mandarelabs/mandare-private-archive`; old → new SHAs in TASKS.md "G5 — History rewritten". Original note: a correct rewrite (a) changes author+committer on every commit, (b) scrubs the address from file CONTENTS too (this row, TASKS.md, SECRET-SCAN-S9.md), and (c) pushes to a BRAND-NEW repo that is then made public — a force-push to this repo leaves the old commits reachable by SHA and via old Actions runs. It stales the recorded commit/run ids. Last step before the flip, in its own pass, only on the founder's same-session go |
-| G6 | **npm/MCP namespace + Trusted Publishing** (founder to-do F1 below) configured | OPEN |
-| G7 | **Dependency-pin decision** — S7 deferred next 16 / fumadocs 16 / the orama override + files-thunk shim; currently still pinned (`next ~15.5.0`, `fumadocs ^15.8.5`). Decide: ship pinned (fine — lockfile-frozen) and upgrade post-launch, or run the upgrade pass in a session BEFORE the flip. Do NOT upgrade on launch day | OPEN — recommend ship-pinned. The in-range security refresh is DONE (S10-fix 2C: next 15.5.26, fastify 5.12.5; `pnpm audit --prod` 0 critical — the 4 left are next's build-time postcss pin) |
-| G8 | **Release workflow dry-run green** — `gh workflow run release.yml` (publish=false) on origin; gate job must show `publish=false`; `sign-skill-dry` (ephemeral key) and `build-and-pack` (incl. `pack-install-smoke` and the as-uploaded skill re-verify) green; `sign-skill-release` and every publish job skipped | STALE — last green run 31320779975 (2026-08-09) predates the S10-fix job restructure. Re-run at the flip commit (founder) |
+| G6 | **npm/MCP namespace + Trusted Publishing** (founder to-do F1 below) configured | **DONE** (F1) |
+| G7 | **Dependency-pin decision** — S7 deferred next 16 / fumadocs 16 / the orama override + files-thunk shim; currently still pinned (`next ~15.5.0`, `fumadocs ^15.8.5`). Decide: ship pinned (fine — lockfile-frozen) and upgrade post-launch, or run the upgrade pass in a session BEFORE the flip. Do NOT upgrade on launch day | **DECIDED: shipped pinned**; the upgrade pass is post-launch. The in-range security refresh is DONE (S10-fix 2C: next 15.5.26, fastify 5.12.5; `pnpm audit --prod` 0 critical — the 4 left are next's build-time postcss pin) |
+| G8 | **Release workflow dry-run green** — `gh workflow run release.yml` (publish=false) on origin; gate job must show `publish=false`; `sign-skill-dry` (ephemeral key) and `build-and-pack` (incl. `pack-install-smoke` and the as-uploaded skill re-verify) green; `sign-skill-release` and every publish job skipped | **GREEN** on `9af8451` (run 36412282213: `publish=false`, sign-skill-dry + build-and-pack green, publish jobs skipped) |
 
 ## The four founder dashboard to-dos (F1–F4)
 
@@ -34,7 +35,7 @@ F2–F4 do not (they close debt and unlock live smokes).
 
 | # | To-do | Blocks | Status 2026-08-09 |
 |---|---|---|---|
-| F1 | Confirm namespace `com.mandarelabs` + `@mandarelabs/*` (DNS TXT verification against mandarelabs.com for the MCP registry — not present as of 2026-09-26; npm org exists). Enable **npm Trusted Publishing** for all **12** publish packages (`release.yml` `PUBLISH_PACKAGES`: spec, policy-engine, verifier, passport, witness-protocol, sdk, ledger, vault, card-rail, witness, cli, mcp-server) with workflow `release.yml` and environment `release`; package settings: disallow tokens, require 2FA. Create the GitHub **environment `release`**: deployment rule = tags `v*` only (optionally a required reviewer). Put `MANDARE_RELEASE_KEY_PEM` on that environment as an **environment secret, not a repo secret** — only the isolated `sign-skill-release` job reads it (generate: `openssl genpkey -algorithm ed25519`; the public hex goes on mandare.dev/security and ships as the release's `RELEASE-KEY.hex`) | **Phase 2+3** | OPEN |
+| F1 | Confirm namespace `com.mandarelabs` + `@mandarelabs/*` (DNS TXT verification against mandarelabs.com for the MCP registry — not present as of 2026-09-26; npm org exists). Enable **npm Trusted Publishing** for all **12** publish packages (`release.yml` `PUBLISH_PACKAGES`: spec, policy-engine, verifier, passport, witness-protocol, sdk, ledger, vault, card-rail, witness, cli, mcp-server) with workflow `release.yml` and environment `release`; package settings: disallow tokens, require 2FA. Create the GitHub **environment `release`**: deployment rule = tags `v*` only (optionally a required reviewer). Put `MANDARE_RELEASE_KEY_PEM` on that environment as an **environment secret, not a repo secret** — only the isolated `sign-skill-release` job reads it (generate: `openssl genpkey -algorithm ed25519`; the public hex goes on mandare.dev/security and ships as the release's `RELEASE-KEY.hex`) | **Phase 2+3** | **DONE** — npm Trusted Publishing ×12 (tokens disallowed) and the MCP DNS TXT record before the flip; the `release` environment (required reviewer, `v*` tags only, admins cannot bypass) and its secret right after the flip, because GitHub Free allows environments on public repositories only |
 | F2 | Enable **Stripe Issuing** on the TEST account (dashboard → Issuing → get started) + set webhook-timeout default to DECLINE, then run `pnpm card-live-smoke` (S5 debt) | nothing (rail is mock-proven in CI) | OPEN |
 | F3 | Run the **OpenTimestamps live-smoke** against the public calendar pool: `pnpm ots-live-smoke` (stamps one epoch root), then the same command again 3–6 h later — PASS when the receipt carries a Bitcoin attestation (the witness upgrade pass, I-5); confirm the written `.ots` with `ots verify` (S6 debt) | nothing (mock adapter proven in CI); nice before HN for honesty | **DONE 2026-09-27** (founder's machine): `pnpm ots-live-smoke` → "PASS: epoch 1 carries a Bitcoin attestation (block 968682) after 17.4 h"; receipt `~/.mandare/ots-live-smoke/epoch-1.ots` (not in the repo); both attested messages equal the Merkle roots of Bitcoin blocks 968682 and 968707 (mempool.space). The live run first exposed the OTS depth-cap bug, fixed in PR mandarelabs/mandare#4 (TASKS.md "S10-fix 2B follow-up") |
 | F4 | Decide the **OpenRouter `disableKey`** per-agent key-hash mapping so the cloud belt wires into `mandare kill` (S3 debt, oldest open item) | nothing (local kill authority is complete) | OPEN |
@@ -54,7 +55,8 @@ moment this executes. G3 protects this step; do not skip the re-run.**
    - Enable **Private Vulnerability Reporting** (SECURITY.md and
      mandare.dev/security tell reporters to use it; it is off today).
    - Org settings: **require two-factor authentication** for every member of
-     `mandarelabs`, and disallow members creating public repositories.
+     `mandarelabs` (done). Restricting members to private repositories needs
+     GitHub Enterprise Cloud; N/A on the Free plan.
    - Branch protection on `main` (require CI, no force-push, no deletion —
      force-push protection is also witness-hygiene for the repo itself).
    - About: description = the README one-liner; topics (`ai-agents`,
@@ -81,7 +83,8 @@ moment this executes. G3 protects this step; do not skip the re-run.**
    that is not a v* tag.
 4. Verify from a clean machine, as a user would:
    - `npm view @mandarelabs/spec` shows the version + provenance badge;
-   - `gh attestation verify` against a downloaded tarball;
+   - `npm audit signatures` in a project that installs the packages (npm
+     provenance lives on the registry, not in GitHub's attestation store);
    - `cosign verify ghcr.io/mandarelabs/mandare:v0.1.0` (keyless, Rekor).
 5. Founder reviews + publishes the draft GitHub release (artifacts +
    SHA256SUMS attached); check the attached `RELEASE-KEY.hex` equals the hex
@@ -102,8 +105,9 @@ moment this executes. G3 protects this step; do not skip the re-run.**
 
 1. Deploy `apps/docs` to mandare.dev (static export; any host) and publish
    the release key hex at mandare.dev/security (P1 pinning source). **Do this
-   before Phase 2's tag push** — today mandare.dev redirects to the marketing
-   site and /security is a 404.
+   before Phase 2's tag push.** Done 2026-09-28: the docs live at
+   mandarelabs.com/docs, and mandare.dev/security redirects to the page that
+   carries the hex.
 2. Check every README link resolves publicly (docs, SECURITY-REVIEW-S8,
    examples, LICENSING, REPRODUCING).
 
