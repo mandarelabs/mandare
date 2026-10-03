@@ -18,7 +18,7 @@ export default function HomePage() {
         Give your agents a budget they cannot talk their way out of.
       </h1>
       <p style={{ maxWidth: '40rem', color: 'var(--color-fd-muted-foreground)' }}>
-        Mandare is the accountability stack for AI agent fleets: verified agent identity
+        Mandare is the accountability stack for AI agent fleets: signed agent identity
         (Passport), signed machine-readable authority (Mandate), a tamper-evident ledger of what
         actually happened, an offline kill switch — and external witnessing so even the operator
         cannot rewrite history. Local-first. Open source.
