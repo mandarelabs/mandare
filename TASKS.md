@@ -2633,6 +2633,64 @@ code, no spec change, no release.
 
 ---
 
+## Docs — sitemap, llms.txt, share tags, journal links (2026-10-03)
+
+**Scope:** `apps/docs` (three routes, metadata, four pages) and one design
+doc (`docs/KEY-DIRECTORY.md`). No package code, no spec change, no new
+dependency, no release.
+
+- **`/docs/sitemap.xml`** (`app/docs/sitemap.ts`): one URL per page on
+  `https://mandarelabs.com`, in sidebar order. `lastmod` is the commit date
+  of the page's source file, read from git while the site is built
+  (`lib/last-commit.ts`). It is left out when git cannot answer truthfully:
+  no repository, a shallow clone, an untracked file.
+- **`/docs/llms.txt` and `/docs/llms-full.txt`** (route handlers,
+  `text/plain`). The summary line is the index page's own `description`.
+  Decision: fumadocs-mdx 11.10.1 exposes the compiled body and the raw file
+  (`page.data.content`), no Markdown export, so `lib/llms.ts` converts the
+  source itself: frontmatter dropped, `<Callout>` turned into a blockquote,
+  site-relative links made absolute. `test/llms.test.ts` runs that over
+  every real page and fails if any other MDX syntax (imports, exports, JSX)
+  survives; that is the signal to extend the converter or move to a remark
+  pipeline.
+- Decision: all three live under `/docs`. The marketing site proxies only
+  that prefix, so a root-level `sitemap.ts` would be unreachable on
+  mandarelabs.com.
+- Decision: no `noindex`, `X-Robots-Tag` or robots rule for the deployment's
+  own host. Proxied requests reach the app under that host, so a rule aimed
+  at it would de-index the public docs. The canonicals handle the alias; the
+  app's `(home)` page now has one too (`/docs`).
+- **Share tags:** Open Graph and Twitter tags on every page
+  (`lib/site.ts`), `og:url` equal to the canonical. Next replaces
+  `openGraph`/`twitter` per segment instead of merging, so each page builds
+  the complete set.
+- **Journal:** a nav link, and one contextual link each in `demos.mdx`,
+  `concepts.mdx` and `integrations/sdk.mdx`.
+- **Wording:** "verified agent identity" → "signed agent identity" on the
+  `(home)` page and in the default description. This closes the item left
+  open by the README claims fix above. `openclaw.mdx` no longer says the
+  ClawHub listing "goes live at launch"; it states the audit gate.
+- **`docs/KEY-DIRECTORY.md`:** "profiled exactly like" → "modelled on",
+  naming the draft and its date, plus a field-by-field comparison with
+  `draft-ietf-webbotauth-httpsig-protocol-00` (2026-09-01). No
+  interoperability is claimed.
+- **Open:**
+  - `mandare directory` writes `"alg": "EdDSA"`; the Web Bot Auth drafts
+    restrict `alg` to the HTTP Signature Algorithms registry (`ed25519`).
+    Now documented, not changed: it is a format decision. The header
+    comment in `packages/verifier/src/directory.ts` still cites the
+    replaced draft.
+  - `git grep -i 'verified owner\|verified human\|verified identity'` still
+    hits four code comments (`packages/gateway/src/server.ts`,
+    `packages/passport/src/attestation.ts`). They describe the signature
+    check and the passport chain's roles, not product copy; left for a
+    session that owns those files.
+  - No JSON-LD on docs pages yet.
+  - Goes live with the next deploy of the docs app. Build it from a full
+    clone, or the sitemap ships without `lastmod`.
+
+---
+
 ## → S9b handoff (the public flip — the first irreversible session) — ORIGINAL (fulfilled — see the S9b log above)
 
 Everything is staged; S9b executes `docs/launch/LAUNCH-CHECKLIST.md` top to
