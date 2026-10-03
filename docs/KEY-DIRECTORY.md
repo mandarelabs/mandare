@@ -22,9 +22,12 @@ No door-only format exists, by design constraint.
 
 ## Format
 
-A **JWK Set** (RFC 7517), profiled exactly like the Web Bot Auth key
-directory (draft-meunier-web-bot-auth / http-message-signatures-directory),
-which is how RFC 9421 verifiers already discover keys:
+A **JWK Set** (RFC 7517), modelled on the HTTP Message Signatures Directory
+from the Web Bot Auth work: the individual Internet-Draft
+`draft-meunier-http-message-signatures-directory` (last revision -05,
+2 March 2026). It is not a conforming implementation of that draft or of its
+successor — see [Relation to the Web Bot Auth drafts](#relation-to-the-web-bot-auth-drafts).
+A directory with one door key:
 
 ```json
 {
@@ -59,6 +62,40 @@ Profile rules (enforced by `parseKeyDirectory` in `@mandarelabs/verifier`):
 - **`mnd:role`** (`door` | `agent`) is a private-use extension member
   (RFC 7517 §4); unknown consumers ignore it.
 - Structural garbage is rejected loudly (`DirectoryParseError`, rule R4).
+
+## Relation to the Web Bot Auth drafts
+
+The individual draft named above has been replaced. The directory format is
+now §5.5 of the IETF Web Bot Auth working group's
+`draft-ietf-webbotauth-httpsig-protocol` (-00, 1 September 2026). Compared
+field by field with that revision on 2026-10-03: **no interoperability with
+Web Bot Auth directories or verifiers is claimed, and none has been tested.**
+
+Shared with the draft: the JWK Set container; the `kty`, `crv`, `x`, `kid`,
+`use`, `nbf` and `exp` members of the draft's example entry, with `kid` as
+the RFC 7638 thumbprint; the well-known path and the media type under
+[Serving](#serving).
+
+Different:
+
+- **`alg`.** `mandare directory` writes `"alg": "EdDSA"`, the JOSE name. The
+  draft (like the one it replaced) restricts `alg` to the HTTP Signature
+  Algorithms registry of RFC 9421, where this key type is `ed25519`.
+  `parseKeyDirectory` does not read `alg`.
+- **Key selection.** The draft selects a key by matching a request's `keyid`
+  against `kid`. Mandare's verifier does not select by `kid`; it matches a
+  ledger entry's `door_signature.key_id` (sha256 hex of the raw public key)
+  and accepts any string as `kid`.
+- **What the keys verify.** The draft's keys verify HTTP request signatures.
+  These keys verify door signatures on ledger entries, and `nbf`/`exp` bound
+  an entry's `ts`. The draft carries `nbf`/`exp` in its example and gives
+  rotation guidance, but defines no verifier rule for them.
+- **Discovery and transport.** The draft resolves the directory from a
+  `Signature-Agent` URL and requires HTTPS, a 200 response and no automatic
+  redirects. `mandare verify --key-directory` takes a path or URL from the
+  operator, also reads local files, refuses `http://` unless
+  `--insecure-directory` is set, accepts any 2xx and follows redirects.
+- **`mnd:role`** is a Mandare extension member; the draft does not define it.
 
 ## Serving
 
