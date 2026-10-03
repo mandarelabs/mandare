@@ -1,15 +1,16 @@
 import type { Metadata } from 'next';
 import { RootProvider } from 'fumadocs-ui/provider';
+import { SITE_DESCRIPTION, SITE_NAME, SITE_ORIGIN, SITE_TITLE, shareMetadata } from '@/lib/site';
 import './global.css';
 
 export const metadata: Metadata = {
-  metadataBase: new URL('https://mandarelabs.com'),
+  metadataBase: new URL(SITE_ORIGIN),
   title: {
-    template: '%s — Mandare',
-    default: 'Mandare — the accountability stack for AI agent fleets',
+    template: `%s — ${SITE_NAME}`,
+    default: SITE_TITLE,
   },
-  description:
-    'Signed agent identity, signed spending mandates, a tamper-evident action ledger, and a kill switch that works offline. Local-first, open source.',
+  description: SITE_DESCRIPTION,
+  ...shareMetadata({ title: SITE_TITLE, description: SITE_DESCRIPTION }),
 };
 
 export default function Layout({ children }: { children: React.ReactNode }) {

@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation';
 import { DocsBody, DocsDescription, DocsPage, DocsTitle } from 'fumadocs-ui/page';
 import defaultMdxComponents from 'fumadocs-ui/mdx';
 
+import { SITE_NAME, shareMetadata } from '@/lib/site';
 import { source } from '@/lib/source';
 
 export default async function Page(props: { params: Promise<{ slug?: string[] }> }) {
@@ -36,5 +37,11 @@ export async function generateMetadata(props: { params: Promise<{ slug?: string[
     title: page.data.title,
     description: page.data.description,
     alternates: { canonical: page.url },
+    ...shareMetadata({
+      title: `${page.data.title} — ${SITE_NAME}`,
+      description: page.data.description,
+      path: page.url,
+      type: 'article',
+    }),
   };
 }

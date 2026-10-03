@@ -1,4 +1,16 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
+
+import { SITE_DESCRIPTION, SITE_TITLE, shareMetadata } from '@/lib/site';
+
+// This page is only reachable on the deployment's own host (mandarelabs.com
+// proxies /docs alone), so it points crawlers at the docs' public address.
+const CANONICAL_PATH = '/docs';
+
+export const metadata: Metadata = {
+  alternates: { canonical: CANONICAL_PATH },
+  ...shareMetadata({ title: SITE_TITLE, description: SITE_DESCRIPTION, path: CANONICAL_PATH }),
+};
 
 export default function HomePage() {
   return (
