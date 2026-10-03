@@ -24,6 +24,10 @@ const anthropic = new Anthropic({
 // body bytes; the door verifies WHO acted and meters it against the mandate.
 ```
 
+What such a signature covers, and what it leaves to the application (the
+body, replay, which components must be signed), is the subject of the journal
+entry [RFC 9421 HTTP message signatures for AI agents](https://mandarelabs.com/journal/rfc-9421-http-message-signatures-ai-agents).
+
 Token mode (S3 scoped tokens) is the lighter path:
 
 ```ts

@@ -16,6 +16,9 @@ export function baseOptions(): BaseLayoutProps {
     links: [
       { text: 'Quickstart', url: '/docs/quickstart' },
       { text: 'Threat model', url: '/docs/threat-model' },
+      // Absolute on purpose: the journal is a static page outside this app,
+      // like "/" above.
+      { text: 'Journal', url: 'https://mandarelabs.com/journal' },
     ],
   };
 }
