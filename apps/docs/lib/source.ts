@@ -1,3 +1,4 @@
+import { flattenTree } from 'fumadocs-core/page-tree';
 import { loader } from 'fumadocs-core/source';
 
 import { docs } from '@/.source';
@@ -17,3 +18,14 @@ export const source = loader({
   // Runtime shape fixed above; the cast keeps the collection's page types.
   source: { files } as unknown as typeof raw,
 });
+
+/**
+ * Every page, in sidebar order, so the generated lists (sitemap, llms.txt)
+ * read like the navigation. A page missing from the tree is appended rather
+ * than dropped.
+ */
+export function pagesInNavOrder() {
+  const inTree = flattenTree(source.pageTree.children).flatMap((item) => source.getNodePage(item) ?? []);
+  const seen = new Set(inTree.map((page) => page.url));
+  return [...inTree, ...source.getPages().filter((page) => !seen.has(page.url))];
+}
