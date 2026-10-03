@@ -12,8 +12,11 @@ Per SPEC §4, there is exactly ONE directory scheme in the system. It serves:
 
 - **door keys** today (gateway/vault/connector signing keys — what the
   verifier anchors ledger authorship against), and
-- **agent passport keys** from S4 on (presented via RFC 9421 HTTP Message
-  Signatures with a `Signature-Agent` header pointing at the directory).
+- **agent passport keys**: the format can carry them (`mnd:role: "agent"`),
+  but doors do not resolve agent keys through the directory today. A door
+  verifies the RFC 9421 request signature against the key in the presented
+  passport, and `Signature-Agent` carries the agent's did:key, not a
+  directory URL.
 
 No door-only format exists, by design constraint.
 

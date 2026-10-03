@@ -17,13 +17,18 @@ import {
 } from './keys.js';
 
 /**
- * RFC 9421 HTTP Message Signatures for Mandare doors (Q3: Cloudflare's
- * `web-bot-auth`, wire-compatible with that ecosystem). This upgrades S3's
- * HMAC proof-of-possession tokens to the passport's ASYMMETRIC agent key and
- * closes S3's known gap (HIGH-1): the signature covers a `Content-Digest`
- * over the exact request body, so an intercepted request can neither be
- * replayed (single-use nonce, bounded created/expires window) nor have its
- * body swapped under a valid proof.
+ * RFC 9421 HTTP Message Signatures for Mandare doors (Q3). Signing and
+ * verification use the `web-bot-auth` npm package's RFC 9421 primitives and
+ * its `web-bot-auth` tag. Interoperability with Web Bot Auth verifiers is NOT
+ * claimed: `Signature-Agent` here is the agent's did:key as a bare string and
+ * `keyid` is the sha256 hex of the raw public key, where the Web Bot Auth
+ * draft requires a dictionary of https URIs and a JWK thumbprint.
+ *
+ * This upgrades S3's HMAC proof-of-possession tokens to the passport's
+ * ASYMMETRIC agent key and closes S3's known gap (HIGH-1): the signature
+ * covers a `Content-Digest` over the exact request body, so an intercepted
+ * request can neither be replayed (single-use nonce, bounded created/expires
+ * window) nor have its body swapped under a valid proof.
  *
  * Covered components (all REQUIRED on verify — a signature that covers less
  * is refused, because `web-bot-auth` itself accepts whatever Signature-Input

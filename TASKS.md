@@ -2600,6 +2600,37 @@ release.
   `glama.json` with each release (Glama rebuilds on every push). The
   `mandare-docs` Vercel project needs a redeploy for the threat-model text.
 
+## Web Bot Auth interop claim removed (2026-10-03)
+
+**Scope:** one source comment + one design-doc sentence
+(`packages/passport/src/request-signature.ts`, `docs/KEY-DIRECTORY.md`). No
+code, no spec change, no release.
+
+- The header comment in `request-signature.ts` called the RFC 9421 request
+  signatures "wire-compatible" with the Web Bot Auth ecosystem. Checked
+  against draft-ietf-webbotauth-httpsig-protocol-00 (2026-09-01): `keyid`
+  MUST be a base64url JWK SHA-256 thumbprint (§5.2), and `Signature-Agent`
+  is a Structured Fields dictionary of https URIs whose dictionary form
+  signers MUST send (§5.2.1). Mandare sends `Signature-Agent` as a bare
+  string holding the agent's did:key, and `keyid` is the sha256 hex of the
+  raw public key. The door-side verifier also refuses parametrized covered
+  components, which the draft's `"signature-agent";key="<label>"` is. The
+  comment now says what is used (the `web-bot-auth` package's RFC 9421
+  primitives and its tag) and that interoperability is not claimed.
+- `docs/KEY-DIRECTORY.md` said agent passport keys are presented with a
+  `Signature-Agent` header pointing at the directory. No door does that: the
+  gateway verifies against the key in the presented passport. Reworded.
+- No other tracked file carries the claim (README, docs-site content,
+  `docs/*.md`, package READMEs grepped).
+- **Open (decisions, not taken here):** (a) whether request signatures
+  should conform to the draft (thumbprint `keyid`, dictionary
+  `Signature-Agent`) — a wire change; (b) `docs/KEY-DIRECTORY.md` still says
+  the directory is "profiled exactly like" the Web Bot Auth key directory,
+  while `mandare directory` writes `"alg": "EdDSA"` and the draft restricts
+  `alg` to the HTTP signature algorithm registry (§5.5.1) — not checked
+  against a verifier; (c) the test label "(web-bot-auth profile)" in
+  `packages/passport/test/request-signature.test.ts`.
+
 ---
 
 ## → S9b handoff (the public flip — the first irreversible session) — ORIGINAL (fulfilled — see the S9b log above)
